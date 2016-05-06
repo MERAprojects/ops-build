@@ -65,3 +65,5 @@ FILES_${PN}-config = "${sysconfdir}"
 
 SYSTEMD_PACKAGES = "${PN}"
 SYSTEMD_SERVICE_${PN} = "nginx.service"
+
+DISABLE_STATIC = ""
