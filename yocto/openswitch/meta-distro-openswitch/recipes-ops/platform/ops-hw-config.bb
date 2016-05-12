@@ -7,7 +7,8 @@ DEPENDS = "yaml-cpp gtest i2c-tools"
 BRANCH ?= "${OPS_REPO_BRANCH}"
 
 SRC_URI = "${OPS_REPO_BASE_URL}/ops-hw-config;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
-"
+           file://0001-Correct-i2c-bus-address.patch \
+           "
 
 SRCREV = "2cc2772c165069da3df1c4d9a70408741dfa61da"
 
