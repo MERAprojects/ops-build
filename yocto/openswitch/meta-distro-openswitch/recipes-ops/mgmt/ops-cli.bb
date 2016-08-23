@@ -5,9 +5,9 @@ LIC_FILES_CHKSUM = "file://COPYING;md5=81bcece21748c91ba9992349a91ec11d\
 
 DEPENDS = "ops-utils ops-ovsdb"
 
-BRANCH ?= "${OPS_REPO_BRANCH}"
+BRANCH ?= "meraswitch/master"
 
-SRC_URI = "${OPS_REPO_BASE_URL}/ops-cli;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
+SRC_URI = "git://git@github.com/MERAprojects/ops-cli;protocol=ssh;branch=${BRANCH} \
 "
 
 SRCREV = "571504f215e64e5d8b95b2492ccdd0f1daeff533"

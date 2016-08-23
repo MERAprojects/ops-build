@@ -8,9 +8,9 @@ DEPENDS = "ops-utils ops-ovsdb ncurses perl-native openssl ops-supportability op
 # the "ip" command from busybox is not sufficient (flush by protocol flushes all routes)
 RDEPENDS_${PN} += "iproute2"
 
-BRANCH ?= "${OPS_REPO_BRANCH}"
+BRANCH ?= "meraswitch/master"
 
-SRC_URI = "${OPS_REPO_BASE_URL}/ops-quagga;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
+SRC_URI = "git://git@github.com/MERAprojects/ops-quagga;protocol=ssh;branch=${BRANCH} \
     file://ops-zebra.service file://ops-bgpd.service file://ops-ospfd.service \
 "
 
