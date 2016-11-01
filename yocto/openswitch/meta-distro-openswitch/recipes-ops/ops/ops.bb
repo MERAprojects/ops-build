@@ -9,7 +9,7 @@ SRC_URI = "${OPS_REPO_BASE_URL}/ops;protocol=${OPS_REPO_PROTOCOL};branch=${BRANC
 "
 
 # SRCREV = "009afc8850e16f9686b5fe4bf39cce1038774f42"
-
+SRCREV = "${AUTOREV}"
 DEPENDS = " \
     python-jsonref-native \
     python-jsonschema-native \
