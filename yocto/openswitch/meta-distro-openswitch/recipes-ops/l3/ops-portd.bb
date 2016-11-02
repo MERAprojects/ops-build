@@ -6,7 +6,7 @@ DEPENDS = "ops-utils ops-ovsdb ops-supportability"
 
 # BRANCH ?= "${OPS_REPO_BRANCH}"
 BRANCH = "meraswitch/devel/master"
-SRC_URI = "${OPS_REPO_BASE_URL}/ops-portd;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
+SRC_URI = "${MERA_OPS_REPO_BASE_URL}/ops-portd;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
            file://ops-portd.service \
            "
 
