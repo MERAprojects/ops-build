@@ -6,7 +6,7 @@ LIC_FILES_CHKSUM = "file://COPYING;md5=81bcece21748c91ba9992349a91ec11d\
 DEPENDS = "ops-utils ops-ovsdb ops-rbac"
 
 # BRANCH ?= "${OPS_REPO_BRANCH}"
-BRANCH = "meraswitch/devel/master"
+BRANCH ?= "${MERA_BUILD_BRANCH}"
 
 SRC_URI = "${MERA_OPS_REPO_BASE_URL}/ops-cli;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
 "

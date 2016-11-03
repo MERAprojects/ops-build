@@ -9,7 +9,7 @@ DEPENDS = "ops-utils ops-ovsdb ncurses perl-native openssl ops-supportability op
 RDEPENDS_${PN} += "iproute2"
 
 # BRANCH ?= "${OPS_REPO_BRANCH}"
-BRANCH = "meraswitch/devel/master"
+BRANCH ?= "${MERA_BUILD_BRANCH}"
 
 SRC_URI = "${MERA_OPS_REPO_BASE_URL}/ops-quagga;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
     file://ops-zebra.service file://ops-bgpd.service file://ops-ospfd.service \
