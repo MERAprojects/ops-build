@@ -8,14 +8,15 @@ DEPENDS = "ops-utils ops-ovsdb ncurses perl-native openssl ops-supportability op
 # the "ip" command from busybox is not sufficient (flush by protocol flushes all routes)
 RDEPENDS_${PN} += "iproute2"
 
-BRANCH ?= "${OPS_REPO_BRANCH}"
+# BRANCH ?= "${OPS_REPO_BRANCH}"
+BRANCH ?= "${MERA_BUILD_BRANCH}"
 
-SRC_URI = "${OPS_REPO_BASE_URL}/ops-quagga;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
+SRC_URI = "${MERA_OPS_REPO_BASE_URL}/ops-quagga;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
     file://ops-zebra.service file://ops-bgpd.service file://ops-ospfd.service \
 "
 
-SRCREV = "2020dbf7fd779485386f04900e60167800af2e81"
-
+# SRCREV = "2020dbf7fd779485386f04900e60167800af2e81"
+SRCREV = "${AUTOREV}"
 # When using AUTOREV, we need to force the package version to the revision of git
 # in order to avoid stale shared states.
 PV = "git${SRCPV}"
