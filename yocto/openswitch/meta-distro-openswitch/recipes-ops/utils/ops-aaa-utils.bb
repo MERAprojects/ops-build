@@ -7,15 +7,17 @@ DEPENDS = "ops-ovsdb ops-cli ops-supportability ops-utils"
 
 RDEPENDS_${PN} = "python-argparse python-json python-ops-ovsdb python-distribute python-pam"
 
-BRANCH ?= "${OPS_REPO_BRANCH}"
+#BRANCH ?= "${OPS_REPO_BRANCH}"
+BRANCH ?= "${MERA_BUILD_BRANCH}"
 
-SRC_URI = "${OPS_REPO_BASE_URL}/ops-aaa-utils;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
+SRC_URI = "${MERA_OPS_REPO_BASE_URL}/ops-aaa-utils;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
            file://aaautils.service \
            file://server \
            file://useradd \
          "
 
-SRCREV = "ff037a14eabfec8f6f38c2ebc8b35bb32fe57bbc"
+#SRCREV = "ff037a14eabfec8f6f38c2ebc8b35bb32fe57bbc"
+SRCREV = "${AUTOREV}"
 
 # When using AUTOREV, we need to force the package version to the revision of git
 # in order to avoid stale shared states.

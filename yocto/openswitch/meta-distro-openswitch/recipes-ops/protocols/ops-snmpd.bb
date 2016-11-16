@@ -6,15 +6,16 @@ DEPENDS = "net-snmp ops-openvswitch ops-ovsdb ops-cli"
 
 RDEPENDS_${PN} = "net-snmp-client net-snmp-server net-snmp-mibs net-snmp-libs perl"
 
-BRANCH ?= "${OPS_REPO_BRANCH}"
+#BRANCH ?= "${OPS_REPO_BRANCH}"
+BRANCH ?= "${MERA_BUILD_BRANCH}"
 
-SRC_URI = "${OPS_REPO_BASE_URL}/ops-snmpd;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
+SRC_URI = "${MERA_OPS_REPO_BASE_URL}/ops-snmpd;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
            file://ops-snmpd.service\
            file://snmpd.conf\
            "
 
-SRCREV="98ae5991e5d1f48af1d6a9ad9fc0d3f1d6a55209"
-
+#SRCREV="98ae5991e5d1f48af1d6a9ad9fc0d3f1d6a55209"
+SRCREV = "${AUTOREV}"
 # When using AUTOREV, we need to force the package version to the revision of git
 # in order to avoid stale shared states.
 #PV = "git${SRCPV}"
