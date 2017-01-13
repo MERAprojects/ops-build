@@ -200,7 +200,8 @@ BB_DISKMON_DIRS = "\
 SSTATE_MIRRORS ?= "\
 file://.* ftp://192.168.220.47/appliance/sstate-cache/PATH \n \
 file://.* ftp://192.168.220.47/appliance_devenv/sstate-cache/PATH \n \
-file://.* ftp://192.168.220.47/sstate-cache/PATH \n \
+file://.* ftp://192.168.220.47/genericx86/sstate-cache/PATH \n \
+file://.* ftp://192.168.220.47/genericx86-64_devenv/sstate-cache/PATH \n \
 file://.* http://##DISTRO_SSTATE_ADDRESS##/PATH"
 
 SOURCE_MIRROR_URL ?= "http://##DISTRO_ARCHIVE_ADDRESS##/"
