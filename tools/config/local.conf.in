@@ -201,10 +201,9 @@ SSTATE_MIRRORS ?= "\
 file://.* ftp://192.168.220.47/appliance/sstate-cache/PATH \n \
 file://.* ftp://192.168.220.47/appliance_devenv/sstate-cache/PATH \n \
 file://.* ftp://192.168.220.47/genericx86/sstate-cache/PATH \n \
-file://.* ftp://192.168.220.47/genericx86-64_devenv/sstate-cache/PATH \n \
-file://.* http://##DISTRO_SSTATE_ADDRESS##/PATH"
+file://.* ftp://192.168.220.47/genericx86-64_devenv/sstate-cache/PATH"
 
-SOURCE_MIRROR_URL ?= "http://##DISTRO_ARCHIVE_ADDRESS##/"
+SOURCE_MIRROR_URL ?= "ftp://##DISTRO_ARCHIVE_ADDRESS##/"
 INHERIT += "own-mirrors" 
 BB_GENERATE_MIRROR_TARBALLS = "1"
 

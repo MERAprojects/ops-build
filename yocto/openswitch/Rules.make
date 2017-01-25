@@ -14,8 +14,8 @@
 
 DISTRO_HELP_LINK=http://www.openswitch.net
 
-DISTRO_ARCHIVE_ADDRESS?=archive.openswitch.net
-DISTRO_SSTATE_ADDRESS?=sstate.openswitch.net
+DISTRO_ARCHIVE_ADDRESS?=192.168.220.47/archive.openswitch.net
+DISTRO_SSTATE_ADDRESS?=192.168.220.47
 DISTRO_FS_TARGET = openswitch-image
 
 DISTRO_CA_BUNDLE = ${BUILD_ROOT}/yocto/openswitch/certs/openswitch.net.crt
