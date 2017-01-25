@@ -9,7 +9,7 @@ S = "${WORKDIR}/linux-3.9.11"
 PR = "r1"
 PV = "${KERNEL_RELEASE}"
 
-SRC_URI = "http://archive.openswitch.net/linux-3.9.11.tar.xz;name=kernel \
+SRC_URI = "ftp://192.168.220.47/archive.openswitch.net/linux-3.9.11.tar.xz;name=kernel \
     file://fix-make-headers-install-when-path-too-long.patch \
     file://audit.c.patch \
     file://fix-autoneg-100mbps-igb.patch \

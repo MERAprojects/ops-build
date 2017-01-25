@@ -9,7 +9,7 @@ S = "${WORKDIR}/linux-3.8.4"
 PR = "r1"
 PV = "${KERNEL_RELEASE}"
 
-SRC_URI = "http://archive.openswitch.net/linux-3.8.4.tar.xz;name=kernel \
+SRC_URI = "ftp://192.168.220.47/archive.openswitch.net/linux-3.8.4.tar.xz;name=kernel \
    file://fix-make-headers-install-when-path-too-long.patch \
    file://fix-race-condition-enc28j60.patch \
 "
