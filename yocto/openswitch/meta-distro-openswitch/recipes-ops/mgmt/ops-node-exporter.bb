@@ -11,6 +11,7 @@ SRC_URI += " \
     file://node-exporter.service \
     file://node-exporter.nginx \
     file://use-native-promu.patch \
+    file://nouname_mips.patch \
 "
 
 DEPENDS = "prometheus-promu-native"

@@ -4,13 +4,15 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/Apache-2.0;md5=89aea4e17d99a7ca
 
 DEPENDS = "ops-utils ops-hw-config ops-ovsdb libevent openssl ops-supportability ops-cli ops-snmpd"
 
-BRANCH ?= "${OPS_REPO_BRANCH}"
+#BRANCH ?= "${OPS_REPO_BRANCH}"
+BRANCH ?= "${MERA_BUILD_BRANCH}"
 
-SRC_URI = "${OPS_REPO_BASE_URL}/ops-lldpd;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
+SRC_URI = "${MERA_OPS_REPO_BASE_URL}/ops-lldpd;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
           file://ops-lldpd.service \
 "
 
-SRCREV = "fd74e10ef2f3beaf57ff0e39c5e611b41f83f18c"
+#SRCREV = "fd74e10ef2f3beaf57ff0e39c5e611b41f83f18c"
+SRCREV = "${AUTOREV}"
 
 # When using AUTOREV, we need to force the package version to the revision of git
 # in order to avoid stale shared states.

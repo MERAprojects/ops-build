@@ -197,11 +197,12 @@ BB_DISKMON_DIRS = "\
 # NOTE: if the mirror uses the same structure as SSTATE_DIR, you need to add PATH
 # at the end as shown in the examples below. This will be substituted with the
 # correct path within the directory structure.
-SSTATE_MIRRORS ?= "\
-file://.* ftp://192.168.220.47/appliance/sstate-cache/PATH \n \
-file://.* ftp://192.168.220.47/appliance_devenv/sstate-cache/PATH \n \
-file://.* ftp://192.168.220.47/genericx86/sstate-cache/PATH \n \
-file://.* ftp://192.168.220.47/genericx86-64_devenv/sstate-cache/PATH"
+#SSTATE_MIRRORS ?= "\"
+#file://.* ftp://192.168.220.47/appliance/sstate-cache/PATH \n \
+#file://.* ftp://192.168.220.47/appliance_devenv/sstate-cache/PATH \n \
+#file://.* ftp://192.168.220.47/genericx86/sstate-cache/PATH \n \
+#file://.* ftp://192.168.220.47/genericx86-64_devenv/sstate-cache/PATH \
+#"
 
 SOURCE_MIRROR_URL ?= "ftp://##DISTRO_ARCHIVE_ADDRESS##/"
 INHERIT += "own-mirrors" 

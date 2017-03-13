@@ -104,7 +104,7 @@ RDEPENDS_packagegroup-ops-min = "\
 
 RDEPENDS_packagegroup-ops-min-debug = "\
     file strace ldd tcpdump gdb gdbserver eglibc-thread-db \
-    iperf ethtool tcf-agent nfs-utils-client \
+    iperf ethtool nfs-utils-client \
     "
 
 RDEPENDS_packagegroup-ops-core = "\

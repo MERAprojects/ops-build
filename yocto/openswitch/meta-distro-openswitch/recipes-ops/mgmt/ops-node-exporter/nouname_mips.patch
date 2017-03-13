@@ -1,0 +1,12 @@
+--- git/collector/uname_linux_int8.go.origin 
++++ git/collector/uname_linux_int8.go
+@@ -11,7 +11,7 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-// +build !nouname,linux,386 !nouname,linux,amd64 !nouname,linux,arm64
++// +build !nouname,linux,386 !nouname,linux,amd64 !nouname,linux,arm64 !nouname,linux,mipsle
+ 
+ package collector
+ 
+

@@ -4,14 +4,15 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/Apache-2.0;md5=89aea4e17d99a7ca
 
 DEPENDS = "ops-utils ops-ovsdb ops-cli"
 
-BRANCH ?= "${OPS_REPO_BRANCH}"
+#BRANCH ?= "${OPS_REPO_BRANCH}"
+BRANCH ?= "${MERA_BUILD_BRANCH}"
 
-SRC_URI = "${OPS_REPO_BASE_URL}/ops-arpmgrd;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
+SRC_URI = "${MERA_OPS_REPO_BASE_URL}/ops-arpmgrd;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
            file://ops-arpmgrd.service \
            "
 
-SRCREV = "cef0d480f1b59306c582fd2db29277975a67d4bc"
-
+#SRCREV = "cef0d480f1b59306c582fd2db29277975a67d4bc"
+SRCREV = "${AUTOREV}"
 # When using AUTOREV, we need to force the package version to the revision of git
 # in order to avoid stale shared states.
 PV = "git${SRCPV}"

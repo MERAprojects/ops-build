@@ -5,13 +5,15 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/Apache-2.0;md5=89aea4e17d99a7ca
 DEPENDS = "ops-utils ops-ovsdb ops-cli ops-supportability"
 
 RDEPENDS_${PN} = "ntp"
-BRANCH ?= "${OPS_REPO_BRANCH}"
+#BRANCH ?= "${OPS_REPO_BRANCH}"
+BRANCH ?= "${MERA_BUILD_BRANCH}"
 
-SRC_URI = "${OPS_REPO_BASE_URL}/ops-ntpd;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
+SRC_URI = "${MERA_OPS_REPO_BASE_URL}/ops-ntpd;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
            file://ops-ntpd.service \
 "
 
-SRCREV = "85ab847014c3e805b9acbaeb54fd3b876de8f233"
+#SRCREV = "85ab847014c3e805b9acbaeb54fd3b876de8f233"
+SRCREV = "${AUTOREV}"
 
 # Mixing of two classes, the build happens on the source directory.
 inherit openswitch cmake setuptools systemd

@@ -5,13 +5,15 @@ LIC_FILES_CHKSUM = "file://setup.py;beginline=1;endline=15;md5=66f387680cedd92d8
 RDEPENDS_${PN} = "python-argparse python-json python-ops-ovsdb python-distribute"
 DEPENDS = "ops-cli ops-supportability"
 
-BRANCH ?= "${OPS_REPO_BRANCH}"
+#BRANCH ?= "${OPS_REPO_BRANCH}"
+BRANCH ?= "${MERA_BUILD_BRANCH}"
 
-SRC_URI = "${OPS_REPO_BASE_URL}/ops-dhcp-tftp;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
+SRC_URI = "${MERA_OPS_REPO_BASE_URL}/ops-dhcp-tftp;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
            file://dhcp_tftp.service \
 "
 
-SRCREV = "53e3919cb1bb851162d38786e25f3a1b6a9342d1"
+#SRCREV = "53e3919cb1bb851162d38786e25f3a1b6a9342d1"
+SRCREV = "${AUTOREV}"
 
 # When using AUTOREV, we need to force the package version to the revision of git
 # in order to avoid stale shared states.

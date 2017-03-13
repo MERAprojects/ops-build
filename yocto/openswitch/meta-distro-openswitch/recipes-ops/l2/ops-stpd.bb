@@ -5,13 +5,15 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/Apache-2.0;md5=89aea4e17d99a7ca
 DEPENDS = "ops-utils ops-ovsdb ops-cli ops-switchd ops-supportability"
 FILES_${PN} += "/usr/lib/cli/plugins/"
 
-BRANCH ?= "${OPS_REPO_BRANCH}"
+#BRANCH ?= "${OPS_REPO_BRANCH}"
+BRANCH ?= "${MERA_BUILD_BRANCH}"
 
-SRC_URI = "${OPS_REPO_BASE_URL}/ops-stpd;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
+SRC_URI = "${MERA_OPS_REPO_BASE_URL}/ops-stpd;protocol=${OPS_REPO_PROTOCOL};branch=${BRANCH} \
            file://ops-stpd.service \
            "
 
-SRCREV = "01a716d027c92e2d71104c87d1c184aba0d7d7fa"
+#SRCREV = "01a716d027c92e2d71104c87d1c184aba0d7d7fa"
+SRCREV = "${AUTOREV}"
 
 # When using AUTOREV, we need to force the package version to the revision of git
 # in order to avoid stale shared states.

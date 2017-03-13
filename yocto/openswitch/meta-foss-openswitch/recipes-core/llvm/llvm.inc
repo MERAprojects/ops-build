@@ -23,6 +23,8 @@ def map_llvm_arch(a, d):
     elif re.match('^arm$', a)    : return 'ARM'
     elif re.match('^aarch64$', a): return 'AArch64'
     elif re.match('^powerpc$', a): return 'PowerPC'
+    elif re.match('^mips$', a): return 'mips'
+    elif re.match('^mipsel$', a): return 'mips'
     else:
         bb.error("cannot map '%s' to a LLVM architecture" % a)
 
