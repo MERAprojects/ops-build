@@ -16,6 +16,7 @@ class ConnmanTest(oeRuntimeTest):
         else:
             return "Unable to get status or logs for %s" % service
 
+    @testcase(961)
     @skipUnlessPassed('test_ssh')
     def test_connmand_help(self):
         (status, output) = self.target.run('/usr/sbin/connmand --help')
@@ -26,5 +27,5 @@ class ConnmanTest(oeRuntimeTest):
     def test_connmand_running(self):
         (status, output) = self.target.run(oeRuntimeTest.pscmd + ' | grep [c]onnmand')
         if status != 0:
-            print self.service_status("connman")
+            print(self.service_status("connman"))
             self.fail("No connmand process running")

@@ -54,6 +54,11 @@ class Svn(FetchMethod):
 
         ud.module = ud.parm["module"]
 
+        if not "path_spec" in ud.parm:
+            ud.path_spec = ud.module
+        else:
+            ud.path_spec = ud.parm["path_spec"]
+
         # Create paths to svn checkouts
         relpath = self._strip_leading_slashes(ud.path)
         ud.pkgdir = os.path.join(data.expand('${SVNDIR}', d), ud.host, relpath)
@@ -102,7 +107,7 @@ class Svn(FetchMethod):
 
             if command == "fetch":
                 transportuser = ud.parm.get("transportuser", "")
-                svncmd = "%s co %s %s://%s%s/%s%s %s" % (ud.basecmd, " ".join(options), proto, transportuser, svnroot, ud.module, suffix, ud.module)
+                svncmd = "%s co %s %s://%s%s/%s%s %s" % (ud.basecmd, " ".join(options), proto, transportuser, svnroot, ud.module, suffix, ud.path_spec)
             elif command == "update":
                 svncmd = "%s update %s" % (ud.basecmd, " ".join(options))
             else:
@@ -121,35 +126,32 @@ class Svn(FetchMethod):
         if os.access(os.path.join(ud.moddir, '.svn'), os.R_OK):
             svnupdatecmd = self._buildsvncommand(ud, d, "update")
             logger.info("Update " + ud.url)
-            # update sources there
-            os.chdir(ud.moddir)
             # We need to attempt to run svn upgrade first in case its an older working format
             try:
-                runfetchcmd(ud.basecmd + " upgrade", d)
+                runfetchcmd(ud.basecmd + " upgrade", d, workdir=ud.moddir)
             except FetchError:
                 pass
             logger.debug(1, "Running %s", svnupdatecmd)
             bb.fetch2.check_network_access(d, svnupdatecmd, ud.url)
-            runfetchcmd(svnupdatecmd, d)
+            runfetchcmd(svnupdatecmd, d, workdir=ud.moddir)
         else:
             svnfetchcmd = self._buildsvncommand(ud, d, "fetch")
             logger.info("Fetch " + ud.url)
             # check out sources there
             bb.utils.mkdirhier(ud.pkgdir)
-            os.chdir(ud.pkgdir)
             logger.debug(1, "Running %s", svnfetchcmd)
             bb.fetch2.check_network_access(d, svnfetchcmd, ud.url)
-            runfetchcmd(svnfetchcmd, d)
+            runfetchcmd(svnfetchcmd, d, workdir=ud.pkgdir)
 
         scmdata = ud.parm.get("scmdata", "")
         if scmdata == "keep":
             tar_flags = ""
         else:
-            tar_flags = "--exclude '.svn'"
+            tar_flags = "--exclude='.svn'"
 
-        os.chdir(ud.pkgdir)
         # tar them up to a defined filename
-        runfetchcmd("tar %s -czf %s %s" % (tar_flags, ud.localpath, ud.module), d, cleanup = [ud.localpath])
+        runfetchcmd("tar %s -czf %s %s" % (tar_flags, ud.localpath, ud.path_spec), d,
+                    cleanup=[ud.localpath], workdir=ud.pkgdir)
 
     def clean(self, ud, d):
         """ Clean SVN specific files and dirs """

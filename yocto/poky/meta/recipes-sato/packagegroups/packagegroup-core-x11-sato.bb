@@ -3,13 +3,11 @@
 #
 
 SUMMARY = "Sato desktop"
-LICENSE = "MIT"
 PR = "r33"
 
 PACKAGE_ARCH = "${MACHINE_ARCH}"
 
 inherit packagegroup distro_features_check
-# rdepends on x11vnc
 REQUIRED_DISTRO_FEATURES = "x11"
 
 PACKAGES = "${PN} ${PN}-base ${PN}-apps ${PN}-games"
@@ -32,29 +30,24 @@ RDEPENDS_${PN}-base = "\
     matchbox-keyboard-im \
     matchbox-config-gtk \
     xcursor-transparent-theme \
-    sato-icon-theme \
+    adwaita-icon-theme \
     settings-daemon \
-    gtk-sato-engine \
     shutdown-desktop \
     libsdl \
     ${NETWORK_MANAGER} \
     udev-extraconf \
-    pulseaudio-server \
-    pulseaudio-client-conf-sato \
+    ${@bb.utils.contains('DISTRO_FEATURES', 'pulseaudio', 'pulseaudio-server pulseaudio-client-conf-sato pulseaudio-misc', '', d)} \
     "
 
-# pcmanfm doesn't work on mips
 FILEMANAGER ?= "pcmanfm"
-FILEMANAGER_mips ?= ""
 
 WEB ?= ""
-#WEB = "midori"
+#WEB = "epiphany"
 
 SUMMARY_${PN}-apps = "Sato desktop - applications"
 RDEPENDS_${PN}-apps = "\
-    leafpad \
-    gst-player-bin \
-    x11vnc \
+    l3afpad \
+    gst-player \
     matchbox-terminal \
     sato-screenshot \
     ${FILEMANAGER} \
@@ -63,5 +56,5 @@ RDEPENDS_${PN}-apps = "\
 
 SUMMARY_${PN}-games = "Sato desktop - games"
 RDEPENDS_${PN}-games = "\
-    oh-puzzles \
+    puzzles \
     "

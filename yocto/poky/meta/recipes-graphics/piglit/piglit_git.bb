@@ -2,55 +2,51 @@ SUMMARY = "OpenGL driver testing framework"
 LICENSE = "MIT & LGPLv2+ & GPLv3 & GPLv2+ & BSD-3-Clause"
 LIC_FILES_CHKSUM = "file://COPYING;md5=b2beded7103a3d8a442a2a0391d607b0"
 
-SRC_URI = "git://anongit.freedesktop.org/piglit"
+SRC_URI = "git://anongit.freedesktop.org/piglit \
+           file://0001-cmake-install-bash-completions-in-the-right-place.patch \
+           file://0001-tests-Use-FE_UPWARD-only-if-its-defined-in-fenv.h.patch \
+           file://0001-cmake-Link-utils-with-xcb-explicitly.patch \
+           file://0001-cmake-Link-test-utils-with-ldl.patch \
+           "
 
-# From 2012/12/30.
-SRCREV = "bbeff5d21b06d37338ad28e42d88f499bef13268"
+# From 2016-07-07
+SRCREV = "c39e41a86551eb390b8da23232dc8577639403d0"
 # (when PV goes above 1.0 remove the trailing r)
 PV = "1.0+gitr${SRCPV}"
 
 S = "${WORKDIR}/git"
 
-DEPENDS = "virtual/libx11 libxrender waffle virtual/libgl libglu python-mako-native python-numpy-native"
+DEPENDS = "libpng virtual/libx11 libxrender waffle virtual/libgl libglu python3-mako-native python3-numpy-native python3-six-native"
 
-inherit cmake pythonnative distro_features_check
+inherit cmake python3native distro_features_check bash-completion
 # depends on virtual/libx11
 REQUIRED_DISTRO_FEATURES = "x11"
 
-# As piglit doesn't install, enforce in-tree builds so that we can easily copy
-# contents out of $S and $B.
-B="${S}"
+# The built scripts go into the temporary directory according to tempfile
+# (typically /tmp) which can race if multiple builds happen on the same machine,
+# so tell it to use a directory in ${B} to avoid overwriting.
+export TEMP = "${B}/temp/"
+do_compile[dirs] =+ "${B}/temp/"
 
 PACKAGECONFIG ??= ""
 PACKAGECONFIG[freeglut] = "-DPIGLIT_USE_GLUT=1,-DPIGLIT_USE_GLUT=0,freeglut,"
 
-# CMake sets the rpath at build time with the source tree, and will reset it at
-# install time. As we don't install this doesn't happen, so force the rpath to
-# what we need.
-EXTRA_OECMAKE = "-DCMAKE_BUILD_WITH_INSTALL_RPATH=1 -DCMAKE_INSTALL_RPATH=${libdir}/piglit/lib"
-
-do_install() {
-	install -d ${D}${bindir}
-	install -m 0755 piglit-*.py ${D}${bindir}
-
-	install -d ${D}${libdir}/piglit/
-
-	install -d ${D}${libdir}/piglit/bin
-	install -m 755 ${S}/bin/* ${D}${libdir}/piglit/bin
-
-	cp -Pr lib/ ${D}${libdir}/piglit/
-	cp -Pr framework/ ${D}${libdir}/piglit/
-	cp -Pr generated_tests/ ${D}${libdir}/piglit/
-	cp -Pr tests/ ${D}${libdir}/piglit/
-	cp -Pr templates/ ${D}${libdir}/piglit/
-
-	sed -i -e 's|sys.path.append(.*)|sys.path.append("${libdir}/piglit")|' ${D}${bindir}/piglit-*.py
-	sed -i -e 's|^templatedir = .*$|templatedir = "${libdir}/piglit/templates"|' ${D}${bindir}/piglit-summary-html.py
+do_configure_prepend() {
+   if [ "${@bb.utils.contains('PACKAGECONFIG', 'freeglut', 'yes', 'no', d)}" = "no" ]; then
+        sed -i -e "/^#.*include <GL\/freeglut_ext.h>$/d" ${S}/src/piglit/glut_wrap.h
+        sed -i -e "/^#.*include.*<GL\/glut.h>$/d" ${S}/src/piglit/glut_wrap.h
+   fi
 }
 
-FILES_${PN}-dbg += "${libdir}/piglit/*/.debug/"
+do_install() {
+	oe_runmake -C ${B} 'DESTDIR=${D}' install/strip
+}
 
-RDEPENDS_${PN} = "python waffle python-json python-subprocess \
-	python-multiprocessing python-textutils python-netserver python-shell \
+RDEPENDS_${PN} = "waffle python3 python3-mako python3-json \
+	python3-subprocess python3-misc python3-importlib \
+	python3-unixadmin python3-xml python3-multiprocessing \
+	python3-six python3-shell python3-io python3-argparse \
 	mesa-demos bash \
 	"
+
+INSANE_SKIP_${PN} += "dev-so already-stripped"

@@ -3,12 +3,15 @@
 #
 
 SUMMARY = "NFS package groups"
-LICENSE = "MIT"
 PR = "r2"
 
 inherit packagegroup
 
-PACKAGES = "${PN}-server"
+PROVIDES = "${PACKAGES}"
+PACKAGES = "${PN}-server ${PN}-client"
+
+SUMMARY_${PN}-client = "NFS client"
+RDEPENDS_${PN}-client = "nfs-utils-client"
 
 SUMMARY_${PN}-server = "NFS server"
 RDEPENDS_${PN}-server = "\

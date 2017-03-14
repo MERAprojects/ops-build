@@ -7,7 +7,6 @@ SECTION = "base"
 DEPENDS = "texinfo-native"
 
 SRC_URI = "${GNU_MIRROR}/cpio/cpio-${PV}.tar.gz \
-    file://statdef.patch \
     "
 
 inherit autotools gettext texinfo
@@ -18,9 +17,11 @@ EXTRA_OECONF += "DEFAULT_RMT_DIR=${base_sbindir}"
 
 do_install () {
     autotools_do_install
-    install -d ${D}${base_bindir}/
-    mv "${D}${bindir}/cpio" "${D}${base_bindir}/cpio"
-    rmdir ${D}${bindir}/
+    if [ "${base_bindir}" != "${bindir}" ]; then
+        install -d ${D}${base_bindir}/
+        mv "${D}${bindir}/cpio" "${D}${base_bindir}/cpio"
+        rmdir ${D}${bindir}/
+    fi
 }
 
 PACKAGES =+ "${PN}-rmt"
@@ -38,3 +39,5 @@ ALTERNATIVE_LINK_NAME[cpio] = "${base_bindir}/cpio"
 
 ALTERNATIVE_PRIORITY[rmt] = "50"
 ALTERNATIVE_LINK_NAME[rmt] = "${base_sbindir}/rmt"
+
+BBCLASSEXTEND = "native"

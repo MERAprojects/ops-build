@@ -25,9 +25,7 @@ class Registry(oe.classutils.ClassRegistry):
         return bool(cls.command)
 
 
-class Terminal(Popen):
-    __metaclass__ = Registry
-
+class Terminal(Popen, metaclass=Registry):
     def __init__(self, sh_cmd, title=None, env=None, d=None):
         fmt_sh_cmd = self.format_command(sh_cmd, title)
         try:
@@ -41,7 +39,7 @@ class Terminal(Popen):
 
     def format_command(self, sh_cmd, title):
         fmt = {'title': title or 'Terminal', 'command': sh_cmd}
-        if isinstance(self.command, basestring):
+        if isinstance(self.command, str):
             return shlex.split(self.command.format(**fmt))
         else:
             return [element.format(**fmt) for element in self.command]
@@ -53,16 +51,38 @@ class XTerminal(Terminal):
             raise UnsupportedTerminal(self.name)
 
 class Gnome(XTerminal):
-    command = 'gnome-terminal -t "{title}" --disable-factory -x {command}'
+    command = 'gnome-terminal -t "{title}" -x {command}'
     priority = 2
 
     def __init__(self, sh_cmd, title=None, env=None, d=None):
-        # Check version
-        vernum = check_terminal_version("gnome-terminal")
-        if vernum and LooseVersion(vernum) >= '3.10':
-            logger.debug(1, 'Gnome-Terminal 3.10 or later does not support --disable-factory')
-            self.command = 'gnome-terminal -t "{title}" -x {command}'
-        XTerminal.__init__(self, sh_cmd, title, env, d)
+        # Recent versions of gnome-terminal does not support non-UTF8 charset:
+        # https://bugzilla.gnome.org/show_bug.cgi?id=732127; as a workaround,
+        # clearing the LC_ALL environment variable so it uses the locale.
+        # Once fixed on the gnome-terminal project, this should be removed.
+        if os.getenv('LC_ALL'): os.putenv('LC_ALL','')
+
+        # We need to know when the command completes but gnome-terminal gives us no way 
+        # to do this. We therefore write the pid to a file using a "phonehome" wrapper
+        # script, then monitor the pid until it exits. Thanks gnome!
+        import tempfile
+        pidfile = tempfile.NamedTemporaryFile(delete = False).name
+        try:
+            sh_cmd = "oe-gnome-terminal-phonehome " + pidfile + " " + sh_cmd
+            XTerminal.__init__(self, sh_cmd, title, env, d)
+            while os.stat(pidfile).st_size <= 0:
+                continue
+            with open(pidfile, "r") as f:
+                pid = int(f.readline())
+        finally:
+            os.unlink(pidfile)
+
+        import time
+        while True:
+            try:
+                os.kill(pid, 0)
+                time.sleep(0.1)
+            except OSError:
+               return
 
 class Mate(XTerminal):
     command = 'mate-terminal -t "{title}" -x {command}'
@@ -77,7 +97,7 @@ class Terminology(XTerminal):
     priority = 2
 
 class Konsole(XTerminal):
-    command = 'konsole --nofork -p tabtitle="{title}" -e {command}'
+    command = 'konsole --nofork --workdir . -p tabtitle="{title}" -e {command}'
     priority = 2
 
     def __init__(self, sh_cmd, title=None, env=None, d=None):
@@ -125,7 +145,7 @@ class TmuxRunning(Terminal):
             raise UnsupportedTerminal('tmux is not running')
 
         if not check_tmux_pane_size('tmux'):
-            raise UnsupportedTerminal('tmux pane too small')
+            raise UnsupportedTerminal('tmux pane too small or tmux < 1.9 version is being used')
 
         Terminal.__init__(self, sh_cmd, title, env, d)
 
@@ -207,11 +227,19 @@ def spawn(name, sh_cmd, title=None, env=None, d=None):
 
     pipe = terminal(sh_cmd, title, env, d)
     output = pipe.communicate()[0]
+    if output:
+        output = output.decode("utf-8")
     if pipe.returncode != 0:
         raise ExecutionError(sh_cmd, pipe.returncode, output)
 
 def check_tmux_pane_size(tmux):
     import subprocess as sub
+    # On older tmux versions (<1.9), return false. The reason
+    # is that there is no easy way to get the height of the active panel
+    # on current window without nested formats (available from version 1.9)
+    vernum = check_terminal_version("tmux")
+    if vernum and LooseVersion(vernum) < '1.9':
+        return False
     try:
         p = sub.Popen('%s list-panes -F "#{?pane_active,#{pane_height},}"' % tmux,
                 shell=True,stdout=sub.PIPE,stderr=sub.PIPE)
@@ -223,16 +251,20 @@ def check_tmux_pane_size(tmux):
             return None
         else:
             raise
-    if size/2 >= 19:
-        return True
-    return False
+
+    return size/2 >= 19
 
 def check_terminal_version(terminalName):
     import subprocess as sub
     try:
-        p = sub.Popen(['sh', '-c', '%s --version' % terminalName],stdout=sub.PIPE,stderr=sub.PIPE)
+        cmdversion = '%s --version' % terminalName
+        if terminalName.startswith('tmux'):
+            cmdversion = '%s -V' % terminalName
+        newenv = os.environ.copy()
+        newenv["LANG"] = "C"
+        p = sub.Popen(['sh', '-c', cmdversion], stdout=sub.PIPE, stderr=sub.PIPE, env=newenv)
         out, err = p.communicate()
-        ver_info = out.rstrip().split('\n')
+        ver_info = out.decode().rstrip().split('\n')
     except OSError as exc:
         import errno
         if exc.errno == errno.ENOENT:
@@ -245,6 +277,8 @@ def check_terminal_version(terminalName):
             vernum = ver.split(' ')[-1]
         if ver.startswith('GNOME Terminal'):
             vernum = ver.split(' ')[-1]
+        if ver.startswith('tmux'):
+            vernum = ver.split()[-1]
     return vernum
 
 def distro_name():

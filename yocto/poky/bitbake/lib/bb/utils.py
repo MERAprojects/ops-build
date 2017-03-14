@@ -27,14 +27,24 @@ import bb
 import bb.msg
 import multiprocessing
 import fcntl
+import imp
+import itertools
 import subprocess
 import glob
+import fnmatch
 import traceback
 import errno
-from commands import getstatusoutput
+import signal
+import ast
+import collections
+import copy
+from subprocess import getstatusoutput
 from contextlib import contextmanager
+from ctypes import cdll
 
 logger = logging.getLogger("BitBake.Util")
+python_extensions = [e for e, _, _ in imp.get_suffixes()]
+
 
 def clean_context():
     return {
@@ -66,7 +76,7 @@ def explode_version(s):
             r.append((0, int(m.group(1))))
             s = m.group(2)
             continue
-        if s[0] in string.letters:
+        if s[0] in string.ascii_letters:
             m = alpha_regexp.match(s)
             r.append((1, m.group(1)))
             s = m.group(2)
@@ -183,7 +193,7 @@ def explode_dep_versions2(s):
     "DEPEND1 (optional version) DEPEND2 (optional version) ..."
     and return a dictionary of dependencies and versions.
     """
-    r = {}
+    r = collections.OrderedDict()
     l = s.replace(",", "").split()
     lastdep = None
     lastcmp = ""
@@ -240,6 +250,7 @@ def explode_dep_versions2(s):
         if not (i in r and r[i]):
             r[lastdep] = []
 
+    r = collections.OrderedDict(sorted(r.items(), key=lambda x: x[0]))
     return r
 
 def explode_dep_versions(s):
@@ -287,19 +298,26 @@ def _print_trace(body, line):
             error.append('     %.4d:%s' % (i, body[i-1].rstrip()))
     return error
 
-def better_compile(text, file, realfile, mode = "exec"):
+def better_compile(text, file, realfile, mode = "exec", lineno = 0):
     """
     A better compile method. This method
     will print the offending lines.
     """
     try:
-        return compile(text, file, mode)
+        cache = bb.methodpool.compile_cache(text)
+        if cache:
+            return cache
+        # We can't add to the linenumbers for compile, we can pad to the correct number of blank lines though
+        text2 = "\n" * int(lineno) + text
+        code = compile(text2, realfile, mode)
+        bb.methodpool.compile_cache_add(text, code)
+        return code
     except Exception as e:
         error = []
         # split the text into lines again
         body = text.split('\n')
-        error.append("Error in compiling python function in %s:\n" % realfile)
-        if e.lineno:
+        error.append("Error in compiling python function in %s, line %s:\n" % (realfile, lineno))
+        if hasattr(e, "lineno"):
             error.append("The code lines resulting in this error were:")
             error.extend(_print_trace(body, e.lineno))
         else:
@@ -319,8 +337,10 @@ def _print_exception(t, value, tb, realfile, text, context):
         exception = traceback.format_exception_only(t, value)
         error.append('Error executing a python function in %s:\n' % realfile)
 
-        # Strip 'us' from the stack (better_exec call)
-        tb = tb.tb_next
+        # Strip 'us' from the stack (better_exec call) unless that was where the 
+        # error came from
+        if tb.tb_next is not None:
+            tb = tb.tb_next
 
         textarray = text.split('\n')
 
@@ -349,25 +369,22 @@ def _print_exception(t, value, tb, realfile, text, context):
                         error.extend(_print_trace(text, tbextract[level+1][1]))
                 except:
                     error.append(tbformat[level+1])
-            elif "d" in context and tbextract[level+1][2]:
-                # Try and find the code in the datastore based on the functionname
-                d = context["d"]
-                functionname = tbextract[level+1][2]
-                text = d.getVar(functionname, True)
-                if text:
-                    error.extend(_print_trace(text.split('\n'), tbextract[level+1][1]))
-                else:
-                    error.append(tbformat[level+1])
             else:
                 error.append(tbformat[level+1])
             nexttb = tb.tb_next
             level = level + 1
 
         error.append("Exception: %s" % ''.join(exception))
+
+        # If the exception is from spwaning a task, let's be helpful and display
+        # the output (which hopefully includes stderr).
+        if isinstance(value, subprocess.CalledProcessError) and value.output:
+            error.append("Subprocess output:")
+            error.append(value.output.decode("utf-8", errors="ignore"))
     finally:
         logger.error("\n".join(error))
 
-def better_exec(code, context, text = None, realfile = "<code>"):
+def better_exec(code, context, text = None, realfile = "<code>", pythonexception=False):
     """
     Similiar to better_compile, better_exec will
     print the lines that are responsible for the
@@ -384,6 +401,8 @@ def better_exec(code, context, text = None, realfile = "<code>"):
         # Error already shown so passthrough, no need for traceback
         raise
     except Exception as e:
+        if pythonexception:
+            raise
         (t, value, tb) = sys.exc_info()
         try:
             _print_exception(t, value, tb, realfile, text, context)
@@ -396,8 +415,13 @@ def better_exec(code, context, text = None, realfile = "<code>"):
 def simple_exec(code, context):
     exec(code, get_context(), context)
 
-def better_eval(source, locals):
-    return eval(source, get_context(), locals)
+def better_eval(source, locals, extraglobals = None):
+    ctx = get_context()
+    if extraglobals:
+        ctx = copy.copy(ctx)
+        for g in extraglobals:
+            ctx[g] = extraglobals[g]
+    return eval(source, ctx, locals)
 
 @contextmanager
 def fileslocked(files):
@@ -412,10 +436,30 @@ def fileslocked(files):
     for lock in locks:
         bb.utils.unlockfile(lock)
 
-def lockfile(name, shared=False, retry=True):
+@contextmanager
+def timeout(seconds):
+    def timeout_handler(signum, frame):
+        pass
+
+    original_handler = signal.signal(signal.SIGALRM, timeout_handler)
+
+    try:
+        signal.alarm(seconds)
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, original_handler)
+
+def lockfile(name, shared=False, retry=True, block=False):
     """
-    Use the file fn as a lock file, return when the lock has been acquired.
-    Returns a variable to pass to unlockfile().
+    Use the specified file as a lock file, return when the lock has
+    been acquired. Returns a variable to pass to unlockfile().
+    Parameters:
+        retry: True to re-try locking if it fails, False otherwise
+        block: True to block until the lock succeeds, False otherwise
+    The retry and block parameters are kind of equivalent unless you
+    consider the possibility of sending a signal to the process to break
+    out - at which point you want block=True rather than retry=True.
     """
     dirname = os.path.dirname(name)
     mkdirhier(dirname)
@@ -428,7 +472,7 @@ def lockfile(name, shared=False, retry=True):
     op = fcntl.LOCK_EX
     if shared:
         op = fcntl.LOCK_SH
-    if not retry:
+    if not retry and not block:
         op = op | fcntl.LOCK_NB
 
     while True:
@@ -509,6 +553,21 @@ def sha256_file(filename):
             s.update(line)
     return s.hexdigest()
 
+def sha1_file(filename):
+    """
+    Return the hex string representation of the SHA1 checksum of the filename
+    """
+    try:
+        import hashlib
+    except ImportError:
+        return None
+
+    s = hashlib.sha1()
+    with open(filename, "rb") as f:
+        for line in f:
+            s.update(line)
+    return s.hexdigest()
+
 def preserved_envvars_exported():
     """Variables which are taken from the environment and placed in and exported
     from the metadata"""
@@ -521,6 +580,8 @@ def preserved_envvars_exported():
         'SHELL',
         'TERM',
         'USER',
+        'LC_ALL',
+        'BBSERVER',
     ]
 
 def preserved_envvars():
@@ -540,13 +601,18 @@ def filter_environment(good_vars):
     """
 
     removed_vars = {}
-    for key in os.environ.keys():
+    for key in list(os.environ):
         if key in good_vars:
             continue
 
         removed_vars[key] = os.environ[key]
-        os.unsetenv(key)
         del os.environ[key]
+
+    # If we spawn a python process, we need to have a UTF-8 locale, else python's file
+    # access methods will use ascii. You can't change that mode once the interpreter is
+    # started so we have to ensure a locale is set. Ideally we'd use C.UTF-8 but not all
+    # distros support that and we need to set something.
+    os.environ["LC_ALL"] = "en_US.UTF-8"
 
     if removed_vars:
         logger.debug(1, "Removed the following variables from the environment: %s", ", ".join(removed_vars.keys()))
@@ -587,7 +653,7 @@ def empty_environment():
     """
     Remove all variables from the environment.
     """
-    for s in os.environ.keys():
+    for s in list(os.environ.keys()):
         os.unsetenv(s)
         del os.environ[s]
 
@@ -597,7 +663,7 @@ def build_environment(d):
     """
     import bb.data
     for var in bb.data.keys(d):
-        export = d.getVarFlag(var, "export")
+        export = d.getVarFlag(var, "export", False)
         if export:
             os.environ[var] = d.getVar(var, True) or ""
 
@@ -719,7 +785,12 @@ def movefile(src, dest, newmtime = None, sstat = None):
     renamefailed = 1
     if sstat[stat.ST_DEV] == dstat[stat.ST_DEV]:
         try:
-            os.rename(src, dest)
+            # os.rename needs to know the dest path ending with file name
+            # so append the file name to a path only if it's a dir specified
+            srcfname = os.path.basename(src)
+            destpath = os.path.join(dest, srcfname) if os.path.isdir(dest) \
+                        else dest
+            os.rename(src, destpath)
             renamefailed = 0
         except Exception as e:
             if e[0] != errno.EXDEV:
@@ -771,7 +842,7 @@ def copyfile(src, dest, newmtime = None, sstat = None):
         if not sstat:
             sstat = os.lstat(src)
     except Exception as e:
-        logger.warn("copyfile: stat of %s failed (%s)" % (src, e))
+        logger.warning("copyfile: stat of %s failed (%s)" % (src, e))
         return False
 
     destexists = 1
@@ -798,7 +869,7 @@ def copyfile(src, dest, newmtime = None, sstat = None):
             #os.lchown(dest,sstat[stat.ST_UID],sstat[stat.ST_GID])
             return os.lstat(dest)
         except Exception as e:
-            logger.warn("copyfile: failed to create symlink %s to %s (%s)" % (dest, target, e))
+            logger.warning("copyfile: failed to create symlink %s to %s (%s)" % (dest, target, e))
             return False
 
     if stat.S_ISREG(sstat[stat.ST_MODE]):
@@ -813,7 +884,7 @@ def copyfile(src, dest, newmtime = None, sstat = None):
             shutil.copyfile(src, dest + "#new")
             os.rename(dest + "#new", dest)
         except Exception as e:
-            logger.warn("copyfile: copy %s to %s failed (%s)" % (src, dest, e))
+            logger.warning("copyfile: copy %s to %s failed (%s)" % (src, dest, e))
             return False
         finally:
             if srcchown:
@@ -824,13 +895,13 @@ def copyfile(src, dest, newmtime = None, sstat = None):
         #we don't yet handle special, so we need to fall back to /bin/mv
         a = getstatusoutput("/bin/cp -f " + "'" + src + "' '" + dest + "'")
         if a[0] != 0:
-            logger.warn("copyfile: failed to copy special file %s to %s (%s)" % (src, dest, a))
+            logger.warning("copyfile: failed to copy special file %s to %s (%s)" % (src, dest, a))
             return False # failure
     try:
         os.lchown(dest, sstat[stat.ST_UID], sstat[stat.ST_GID])
         os.chmod(dest, stat.S_IMODE(sstat[stat.ST_MODE])) # Sticky is reset on chown
     except Exception as e:
-        logger.warn("copyfile: failed to chown/chmod %s (%s)" % (dest, e))
+        logger.warning("copyfile: failed to chown/chmod %s (%s)" % (dest, e))
         return False
 
     if newmtime:
@@ -877,15 +948,33 @@ def to_boolean(string, default=None):
         raise ValueError("Invalid value for to_boolean: %s" % string)
 
 def contains(variable, checkvalues, truevalue, falsevalue, d):
+    """Check if a variable contains all the values specified.
+
+    Arguments:
+
+    variable -- the variable name. This will be fetched and expanded (using
+    d.getVar(variable, True)) and then split into a set().
+
+    checkvalues -- if this is a string it is split on whitespace into a set(),
+    otherwise coerced directly into a set().
+
+    truevalue -- the value to return if checkvalues is a subset of variable.
+
+    falsevalue -- the value to return if variable is empty or if checkvalues is
+    not a subset of variable.
+
+    d -- the data store.
+    """
+
     val = d.getVar(variable, True)
     if not val:
         return falsevalue
     val = set(val.split())
-    if isinstance(checkvalues, basestring):
+    if isinstance(checkvalues, str):
         checkvalues = set(checkvalues.split())
     else:
         checkvalues = set(checkvalues)
-    if checkvalues.issubset(val): 
+    if checkvalues.issubset(val):
         return truevalue
     return falsevalue
 
@@ -894,7 +983,7 @@ def contains_any(variable, checkvalues, truevalue, falsevalue, d):
     if not val:
         return falsevalue
     val = set(val.split())
-    if isinstance(checkvalues, basestring):
+    if isinstance(checkvalues, str):
         checkvalues = set(checkvalues.split())
     else:
         checkvalues = set(checkvalues)
@@ -963,7 +1052,7 @@ def exec_flat_python_func(func, *args, **kwargs):
         aidx += 1
     # Handle keyword arguments
     context.update(kwargs)
-    funcargs.extend(['%s=%s' % (arg, arg) for arg in kwargs.iterkeys()])
+    funcargs.extend(['%s=%s' % (arg, arg) for arg in kwargs.keys()])
     code = 'retval = %s(%s)' % (func, ', '.join(funcargs))
     comp = bb.utils.better_compile(code, '<string>', '<string>')
     bb.utils.better_exec(comp, context, code, '<string>')
@@ -992,7 +1081,7 @@ def edit_metadata(meta_lines, variables, varfunc, match_overrides=False):
                 newlines: list of lines up to this point. You can use
                     this to prepend lines before this variable setting
                     if you wish.
-            and should return a three-element tuple:
+            and should return a four-element tuple:
                 newvalue: new value to substitute in, or None to drop
                     the variable setting entirely. (If the removal
                     results in two consecutive blank lines, one of the
@@ -1006,6 +1095,8 @@ def edit_metadata(meta_lines, variables, varfunc, match_overrides=False):
                     multi-line value to continue on the same line as
                     the assignment, False to indent before the first
                     element.
+            To clarify, if you wish not to change the value, then you
+            would return like this: return origvalue, None, 0, True
         match_overrides: True to match items with _overrides on the end,
             False otherwise
     Returns a tuple:
@@ -1050,7 +1141,7 @@ def edit_metadata(meta_lines, variables, varfunc, match_overrides=False):
             else:
                 varset_new = varset_start
 
-            if isinstance(indent, (int, long)):
+            if isinstance(indent, int):
                 if indent == -1:
                     indentspc = ' ' * (len(varset_new) + 2)
                 else:
@@ -1111,14 +1202,14 @@ def edit_metadata(meta_lines, variables, varfunc, match_overrides=False):
                 if in_var.endswith('()'):
                     if full_value.count('{') - full_value.count('}') >= 0:
                         continue
-                full_value = full_value[:-1]
+                    full_value = full_value[:-1]
                 if handle_var_end():
                     updated = True
                     checkspc = True
                 in_var = None
         else:
             skip = False
-            for (varname, var_re) in var_res.iteritems():
+            for (varname, var_re) in var_res.items():
                 res = var_re.match(line)
                 if res:
                     isfunc = varname.endswith('()')
@@ -1148,7 +1239,7 @@ def edit_metadata(meta_lines, variables, varfunc, match_overrides=False):
             if not skip:
                 if checkspc:
                     checkspc = False
-                    if newlines[-1] == '\n' and line == '\n':
+                    if newlines and newlines[-1] == '\n' and line == '\n':
                         # Squash blank line if there are two consecutive blanks after a removal
                         continue
                 newlines.append(line)
@@ -1172,13 +1263,32 @@ def edit_metadata_file(meta_file, variables, varfunc):
 
 
 def edit_bblayers_conf(bblayers_conf, add, remove):
-    """Edit bblayers.conf, adding and/or removing layers"""
+    """Edit bblayers.conf, adding and/or removing layers
+    Parameters:
+        bblayers_conf: path to bblayers.conf file to edit
+        add: layer path (or list of layer paths) to add; None or empty
+            list to add nothing
+        remove: layer path (or list of layer paths) to remove; None or
+            empty list to remove nothing
+    Returns a tuple:
+        notadded: list of layers specified to be added but weren't
+            (because they were already in the list)
+        notremoved: list of layers that were specified to be removed
+            but weren't (because they weren't in the list)
+    """
 
     import fnmatch
 
     def remove_trailing_sep(pth):
         if pth and pth[-1] == os.sep:
             pth = pth[:-1]
+        return pth
+
+    approved = bb.utils.approved_variables()
+    def canonicalise_path(pth):
+        pth = remove_trailing_sep(pth)
+        if 'HOME' in approved and '~' in pth:
+            pth = os.path.expanduser(pth)
         return pth
 
     def layerlist_param(value):
@@ -1189,47 +1299,79 @@ def edit_bblayers_conf(bblayers_conf, add, remove):
         else:
             return [remove_trailing_sep(value)]
 
-    notadded = []
-    notremoved = []
-
     addlayers = layerlist_param(add)
     removelayers = layerlist_param(remove)
 
     # Need to use a list here because we can't set non-local variables from a callback in python 2.x
     bblayercalls = []
+    removed = []
+    plusequals = False
+    orig_bblayers = []
+
+    def handle_bblayers_firstpass(varname, origvalue, op, newlines):
+        bblayercalls.append(op)
+        if op == '=':
+            del orig_bblayers[:]
+        orig_bblayers.extend([canonicalise_path(x) for x in origvalue.split()])
+        return (origvalue, None, 2, False)
 
     def handle_bblayers(varname, origvalue, op, newlines):
-        bblayercalls.append(varname)
         updated = False
         bblayers = [remove_trailing_sep(x) for x in origvalue.split()]
         if removelayers:
             for removelayer in removelayers:
-                matched = False
                 for layer in bblayers:
-                    if fnmatch.fnmatch(layer, removelayer):
+                    if fnmatch.fnmatch(canonicalise_path(layer), canonicalise_path(removelayer)):
                         updated = True
-                        matched = True
                         bblayers.remove(layer)
+                        removed.append(removelayer)
                         break
-                if not matched:
-                    notremoved.append(removelayer)
-        if addlayers:
+        if addlayers and not plusequals:
             for addlayer in addlayers:
                 if addlayer not in bblayers:
                     updated = True
                     bblayers.append(addlayer)
-                else:
-                    notadded.append(addlayer)
+            del addlayers[:]
 
         if updated:
+            if op == '+=' and not bblayers:
+                bblayers = None
             return (bblayers, None, 2, False)
         else:
             return (origvalue, None, 2, False)
 
-    edit_metadata_file(bblayers_conf, ['BBLAYERS'], handle_bblayers)
+    with open(bblayers_conf, 'r') as f:
+        (_, newlines) = edit_metadata(f, ['BBLAYERS'], handle_bblayers_firstpass)
 
     if not bblayercalls:
         raise Exception('Unable to find BBLAYERS in %s' % bblayers_conf)
+
+    # Try to do the "smart" thing depending on how the user has laid out
+    # their bblayers.conf file
+    if bblayercalls.count('+=') > 1:
+        plusequals = True
+
+    removelayers_canon = [canonicalise_path(layer) for layer in removelayers]
+    notadded = []
+    for layer in addlayers:
+        layer_canon = canonicalise_path(layer)
+        if layer_canon in orig_bblayers and not layer_canon in removelayers_canon:
+            notadded.append(layer)
+    notadded_canon = [canonicalise_path(layer) for layer in notadded]
+    addlayers[:] = [layer for layer in addlayers if canonicalise_path(layer) not in notadded_canon]
+
+    (updated, newlines) = edit_metadata(newlines, ['BBLAYERS'], handle_bblayers)
+    if addlayers:
+        # Still need to add these
+        for addlayer in addlayers:
+            newlines.append('BBLAYERS += "%s"\n' % addlayer)
+        updated = True
+
+    if updated:
+        with open(bblayers_conf, 'w') as f:
+            f.writelines(newlines)
+
+    notremoved = list(set(removelayers) - set(removed))
 
     return (notadded, notremoved)
 
@@ -1241,11 +1383,123 @@ def get_file_layer(filename, d):
     for collection in collections:
         collection_res[collection] = d.getVar('BBFILE_PATTERN_%s' % collection, True) or ''
 
-    # Use longest path so we handle nested layers
-    matchlen = 0
-    match = None
-    for collection, regex in collection_res.iteritems():
-        if len(regex) > matchlen and re.match(regex, filename):
-            matchlen = len(regex)
-            match = collection
-    return match
+    def path_to_layer(path):
+        # Use longest path so we handle nested layers
+        matchlen = 0
+        match = None
+        for collection, regex in collection_res.items():
+            if len(regex) > matchlen and re.match(regex, path):
+                matchlen = len(regex)
+                match = collection
+        return match
+
+    result = None
+    bbfiles = (d.getVar('BBFILES', True) or '').split()
+    bbfilesmatch = False
+    for bbfilesentry in bbfiles:
+        if fnmatch.fnmatch(filename, bbfilesentry):
+            bbfilesmatch = True
+            result = path_to_layer(bbfilesentry)
+
+    if not bbfilesmatch:
+        # Probably a bbclass
+        result = path_to_layer(filename)
+
+    return result
+
+
+# Constant taken from http://linux.die.net/include/linux/prctl.h
+PR_SET_PDEATHSIG = 1
+
+class PrCtlError(Exception):
+    pass
+
+def signal_on_parent_exit(signame):
+    """
+    Trigger signame to be sent when the parent process dies
+    """
+    signum = getattr(signal, signame)
+    # http://linux.die.net/man/2/prctl
+    result = cdll['libc.so.6'].prctl(PR_SET_PDEATHSIG, signum)
+    if result != 0:
+        raise PrCtlError('prctl failed with error code %s' % result)
+
+#
+# Manually call the ioprio syscall. We could depend on other libs like psutil
+# however this gets us enough of what we need to bitbake for now without the
+# dependency
+#
+_unamearch = os.uname()[4]
+IOPRIO_WHO_PROCESS = 1
+IOPRIO_CLASS_SHIFT = 13
+
+def ioprio_set(who, cls, value):
+    NR_ioprio_set = None
+    if _unamearch == "x86_64":
+      NR_ioprio_set = 251
+    elif _unamearch[0] == "i" and _unamearch[2:3] == "86":
+      NR_ioprio_set = 289
+
+    if NR_ioprio_set:
+        ioprio = value | (cls << IOPRIO_CLASS_SHIFT)
+        rc = cdll['libc.so.6'].syscall(NR_ioprio_set, IOPRIO_WHO_PROCESS, who, ioprio)
+        if rc != 0:
+            raise ValueError("Unable to set ioprio, syscall returned %s" % rc)
+    else:
+        bb.warn("Unable to set IO Prio for arch %s" % _unamearch)
+
+def set_process_name(name):
+    from ctypes import cdll, byref, create_string_buffer
+    # This is nice to have for debugging, not essential
+    try:
+        libc = cdll.LoadLibrary('libc.so.6')
+        buf = create_string_buffer(bytes(name, 'utf-8'))
+        libc.prctl(15, byref(buf), 0, 0, 0)
+    except:
+        pass
+
+# export common proxies variables from datastore to environment
+def export_proxies(d):
+    import os
+
+    variables = ['http_proxy', 'HTTP_PROXY', 'https_proxy', 'HTTPS_PROXY',
+                    'ftp_proxy', 'FTP_PROXY', 'no_proxy', 'NO_PROXY',
+                    'GIT_PROXY_COMMAND']
+    exported = False
+
+    for v in variables:
+        if v in os.environ.keys():
+            exported = True
+        else:
+            v_proxy = d.getVar(v, True)
+            if v_proxy is not None:
+                os.environ[v] = v_proxy
+                exported = True
+
+    return exported
+
+
+def load_plugins(logger, plugins, pluginpath):
+    def load_plugin(name):
+        logger.debug('Loading plugin %s' % name)
+        fp, pathname, description = imp.find_module(name, [pluginpath])
+        try:
+            return imp.load_module(name, fp, pathname, description)
+        finally:
+            if fp:
+                fp.close()
+
+    logger.debug('Loading plugins from %s...' % pluginpath)
+
+    expanded = (glob.glob(os.path.join(pluginpath, '*' + ext))
+                for ext in python_extensions)
+    files = itertools.chain.from_iterable(expanded)
+    names = set(os.path.splitext(os.path.basename(fn))[0] for fn in files)
+    for name in names:
+        if name != '__init__':
+            plugin = load_plugin(name)
+            if hasattr(plugin, 'plugin_init'):
+                obj = plugin.plugin_init(plugins)
+                plugins.append(obj or plugin)
+            else:
+                plugins.append(plugin)

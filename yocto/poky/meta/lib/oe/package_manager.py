@@ -5,10 +5,13 @@ import subprocess
 import shutil
 import multiprocessing
 import re
+import collections
 import bb
 import tempfile
 import oe.utils
-
+import oe.path
+import string
+from oe.gpg_sign import get_signer
 
 # this can be used by all PM backends to create the index files in parallel
 def create_index(arg):
@@ -16,20 +19,79 @@ def create_index(arg):
 
     try:
         bb.note("Executing '%s' ..." % index_cmd)
-        result = subprocess.check_output(index_cmd, stderr=subprocess.STDOUT, shell=True)
+        result = subprocess.check_output(index_cmd, stderr=subprocess.STDOUT, shell=True).decode("utf-8")
     except subprocess.CalledProcessError as e:
         return("Index creation command '%s' failed with return code %d:\n%s" %
-               (e.cmd, e.returncode, e.output))
+               (e.cmd, e.returncode, e.output.decode("utf-8")))
 
     if result:
         bb.note(result)
 
     return None
 
+"""
+This method parse the output from the package managerand return
+a dictionary with the information of the packages. This is used
+when the packages are in deb or ipk format.
+"""
+def opkg_query(cmd_output):
+    verregex = re.compile(' \([=<>]* [^ )]*\)')
+    output = dict()
+    pkg = ""
+    arch = ""
+    ver = ""
+    filename = ""
+    dep = []
+    pkgarch = ""
+    for line in cmd_output.splitlines():
+        line = line.rstrip()
+        if ':' in line:
+            if line.startswith("Package: "):
+                pkg = line.split(": ")[1]
+            elif line.startswith("Architecture: "):
+                arch = line.split(": ")[1]
+            elif line.startswith("Version: "):
+                ver = line.split(": ")[1]
+            elif line.startswith("File: ") or line.startswith("Filename:"):
+                filename = line.split(": ")[1]
+                if "/" in filename:
+                    filename = os.path.basename(filename)
+            elif line.startswith("Depends: "):
+                depends = verregex.sub('', line.split(": ")[1])
+                for depend in depends.split(", "):
+                    dep.append(depend)
+            elif line.startswith("Recommends: "):
+                recommends = verregex.sub('', line.split(": ")[1])
+                for recommend in recommends.split(", "):
+                    dep.append("%s [REC]" % recommend)
+            elif line.startswith("PackageArch: "):
+                pkgarch = line.split(": ")[1]
 
-class Indexer(object):
-    __metaclass__ = ABCMeta
+        # When there is a blank line save the package information
+        elif not line:
+            # IPK doesn't include the filename
+            if not filename:
+                filename = "%s_%s_%s.ipk" % (pkg, ver, arch)
+            if pkg:
+                output[pkg] = {"arch":arch, "ver":ver,
+                        "filename":filename, "deps": dep, "pkgarch":pkgarch }
+            pkg = ""
+            arch = ""
+            ver = ""
+            filename = ""
+            dep = []
+            pkgarch = ""
 
+    if pkg:
+        if not filename:
+            filename = "%s_%s_%s.ipk" % (pkg, ver, arch)
+        output[pkg] = {"arch":arch, "ver":ver,
+                "filename":filename, "deps": dep }
+
+    return output
+
+
+class Indexer(object, metaclass=ABCMeta):
     def __init__(self, d, deploy_dir):
         self.d = d
         self.deploy_dir = deploy_dir
@@ -41,13 +103,8 @@ class Indexer(object):
 
 class RpmIndexer(Indexer):
     def get_ml_prefix_and_os_list(self, arch_var=None, os_var=None):
-        package_archs = {
-            'default': [],
-        }
-
-        target_os = {
-            'default': "",
-        }
+        package_archs = collections.OrderedDict()
+        target_os = collections.OrderedDict()
 
         if arch_var is not None and os_var is not None:
             package_archs['default'] = self.d.getVar(arch_var, True).split()
@@ -78,7 +135,7 @@ class RpmIndexer(Indexer):
                         target_os[eext[1]] = localdata.getVar("TARGET_OS",
                                                               True).strip()
 
-        ml_prefix_list = dict()
+        ml_prefix_list = collections.OrderedDict()
         for mlib in package_archs:
             if mlib == 'default':
                 ml_prefix_list[mlib] = package_archs[mlib]
@@ -108,7 +165,12 @@ class RpmIndexer(Indexer):
         archs = archs.union(set(sdk_pkg_archs))
 
         rpm_createrepo = bb.utils.which(os.getenv('PATH'), "createrepo")
+        if self.d.getVar('PACKAGE_FEED_SIGN', True) == '1':
+            signer = get_signer(self.d, self.d.getVar('PACKAGE_FEED_GPG_BACKEND', True))
+        else:
+            signer = None
         index_cmds = []
+        repomd_files = []
         rpm_dirs_found = False
         for arch in archs:
             dbpath = os.path.join(self.d.getVar('WORKDIR', True), 'rpmdb', arch)
@@ -120,6 +182,7 @@ class RpmIndexer(Indexer):
 
             index_cmds.append("%s --dbpath %s --update -q %s" % \
                              (rpm_createrepo, dbpath, arch_dir))
+            repomd_files.append(os.path.join(arch_dir, 'repodata', 'repomd.xml'))
 
             rpm_dirs_found = True
 
@@ -127,9 +190,19 @@ class RpmIndexer(Indexer):
             bb.note("There are no packages in %s" % self.deploy_dir)
             return
 
+        # Create repodata
         result = oe.utils.multiprocess_exec(index_cmds, create_index)
         if result:
             bb.fatal('%s' % ('\n'.join(result)))
+        # Sign repomd
+        if signer:
+            for repomd in repomd_files:
+                feed_sig_type = self.d.getVar('PACKAGE_FEED_GPG_SIGNATURE_TYPE', True)
+                is_ascii_sig = (feed_sig_type.upper() != "BIN")
+                signer.detach_sign(repomd,
+                                   self.d.getVar('PACKAGE_FEED_GPG_NAME', True),
+                                   self.d.getVar('PACKAGE_FEED_GPG_PASSPHRASE_FILE', True),
+                                   armor=is_ascii_sig)
 
 
 class OpkgIndexer(Indexer):
@@ -139,11 +212,16 @@ class OpkgIndexer(Indexer):
                      "MULTILIB_ARCHS"]
 
         opkg_index_cmd = bb.utils.which(os.getenv('PATH'), "opkg-make-index")
+        if self.d.getVar('PACKAGE_FEED_SIGN', True) == '1':
+            signer = get_signer(self.d, self.d.getVar('PACKAGE_FEED_GPG_BACKEND', True))
+        else:
+            signer = None
 
         if not os.path.exists(os.path.join(self.deploy_dir, "Packages")):
             open(os.path.join(self.deploy_dir, "Packages"), "w").close()
 
-        index_cmds = []
+        index_cmds = set()
+        index_sign_files = set()
         for arch_var in arch_vars:
             archs = self.d.getVar(arch_var, True)
             if archs is None:
@@ -159,8 +237,10 @@ class OpkgIndexer(Indexer):
                 if not os.path.exists(pkgs_file):
                     open(pkgs_file, "w").close()
 
-                index_cmds.append('%s -r %s -p %s -m %s' %
+                index_cmds.add('%s -r %s -p %s -m %s' %
                                   (opkg_index_cmd, pkgs_file, pkgs_file, pkgs_dir))
+
+                index_sign_files.add(pkgs_file)
 
         if len(index_cmds) == 0:
             bb.note("There are no packages in %s!" % self.deploy_dir)
@@ -170,6 +250,14 @@ class OpkgIndexer(Indexer):
         if result:
             bb.fatal('%s' % ('\n'.join(result)))
 
+        if signer:
+            feed_sig_type = self.d.getVar('PACKAGE_FEED_GPG_SIGNATURE_TYPE', True)
+            is_ascii_sig = (feed_sig_type.upper() != "BIN")
+            for f in index_sign_files:
+                signer.detach_sign(f,
+                                   self.d.getVar('PACKAGE_FEED_GPG_NAME', True),
+                                   self.d.getVar('PACKAGE_FEED_GPG_PASSPHRASE_FILE', True),
+                                   armor=is_ascii_sig)
 
 
 class DpkgIndexer(Indexer):
@@ -211,7 +299,7 @@ class DpkgIndexer(Indexer):
                 if a not in pkg_archs:
                     arch_list.append(a)
 
-        all_mlb_pkg_arch_list = (self.d.getVar('ALL_MULTILIB_PACKAGE_ARCHS', True) or "").replace('-', '_').split()
+        all_mlb_pkg_arch_list = (self.d.getVar('ALL_MULTILIB_PACKAGE_ARCHS', True) or "").split()
         arch_list.extend(arch for arch in all_mlb_pkg_arch_list if arch not in arch_list)
 
         apt_ftparchive = bb.utils.which(os.getenv('PATH'), "apt-ftparchive")
@@ -244,18 +332,18 @@ class DpkgIndexer(Indexer):
         result = oe.utils.multiprocess_exec(index_cmds, create_index)
         if result:
             bb.fatal('%s' % ('\n'.join(result)))
+        if self.d.getVar('PACKAGE_FEED_SIGN', True) == '1':
+            raise NotImplementedError('Package feed signing not implementd for dpkg')
 
 
 
-class PkgsList(object):
-    __metaclass__ = ABCMeta
-
+class PkgsList(object, metaclass=ABCMeta):
     def __init__(self, d, rootfs_dir):
         self.d = d
         self.rootfs_dir = rootfs_dir
 
     @abstractmethod
-    def list(self, format=None):
+    def list_pkgs(self):
         pass
 
 
@@ -272,11 +360,10 @@ class RpmPkgsList(PkgsList):
         # Determine rpm version
         cmd = "%s --version" % self.rpm_cmd
         try:
-            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True).decode("utf-8")
         except subprocess.CalledProcessError as e:
             bb.fatal("Getting rpm version failed. Command '%s' "
-                     "returned %d:\n%s" % (cmd, e.returncode, e.output))
-        self.rpm_version = int(output.split()[-1].split('.')[0])
+                     "returned %d:\n%s" % (cmd, e.returncode, e.output.decode("utf-8")))
 
     '''
     Translate the RPM/Smart format names to the OE multilib format names
@@ -317,177 +404,119 @@ class RpmPkgsList(PkgsList):
                "-t", self.image_rpmlib]
 
         try:
-            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT).strip()
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT).strip().decode("utf-8")
         except subprocess.CalledProcessError as e:
             bb.fatal("Cannot get the package dependencies. Command '%s' "
-                     "returned %d:\n%s" % (' '.join(cmd), e.returncode, e.output))
+                     "returned %d:\n%s" % (' '.join(cmd), e.returncode, e.output.decode("utf-8")))
 
         return output
 
-    def list(self, format=None):
-        if format == "deps":
-            if self.rpm_version == 4:
-                bb.fatal("'deps' format dependency listings are not supported with rpm 4 since rpmresolve does not work")
-            return self._list_pkg_deps()
-
+    def list_pkgs(self):
         cmd = self.rpm_cmd + ' --root ' + self.rootfs_dir
         cmd += ' -D "_dbpath /var/lib/rpm" -qa'
-        if self.rpm_version == 4:
-            cmd += " --qf '[%{NAME} %{ARCH} %{VERSION}\n]'"
-        else:
-            cmd += " --qf '[%{NAME} %{ARCH} %{VERSION} %{PACKAGEORIGIN}\n]'"
+        cmd += " --qf '[%{NAME} %{ARCH} %{VERSION} %{PACKAGEORIGIN}\n]'"
 
         try:
             # bb.note(cmd)
-            tmp_output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True).strip()
-
+            tmp_output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True).strip().decode("utf-8")
         except subprocess.CalledProcessError as e:
             bb.fatal("Cannot get the installed packages list. Command '%s' "
-                     "returned %d:\n%s" % (cmd, e.returncode, e.output))
+                     "returned %d:\n%s" % (cmd, e.returncode, e.output.decode("utf-8")))
 
-        output = list()
+        output = dict()
+        deps = dict()
+        dependencies = self._list_pkg_deps()
+
+        # Populate deps dictionary for better manipulation
+        for line in dependencies.splitlines():
+            try:
+                pkg, dep = line.split("|")
+                if not pkg in deps:
+                    deps[pkg] = list()
+                if not dep in deps[pkg]:
+                    deps[pkg].append(dep)
+            except:
+                # Ignore any other lines they're debug or errors
+                pass
+
         for line in tmp_output.split('\n'):
             if len(line.strip()) == 0:
                 continue
             pkg = line.split()[0]
             arch = line.split()[1]
             ver = line.split()[2]
-            if self.rpm_version == 4:
-                pkgorigin = "unknown"
-            else:
-                pkgorigin = line.split()[3]
+            dep = deps.get(pkg, [])
+
+            # Skip GPG keys
+            if pkg == 'gpg-pubkey':
+                continue
+
+            pkgorigin = line.split()[3]
             new_pkg, new_arch = self._pkg_translate_smart_to_oe(pkg, arch)
 
-            if format == "arch":
-                output.append('%s %s' % (new_pkg, new_arch))
-            elif format == "file":
-                output.append('%s %s %s' % (new_pkg, pkgorigin, new_arch))
-            elif format == "ver":
-                output.append('%s %s %s' % (new_pkg, new_arch, ver))
-            else:
-                output.append('%s' % (new_pkg))
+            output[new_pkg] = {"arch":new_arch, "ver":ver,
+                        "filename":pkgorigin, "deps":dep}
 
-            output.sort()
-
-        return '\n'.join(output)
+        return output
 
 
 class OpkgPkgsList(PkgsList):
     def __init__(self, d, rootfs_dir, config_file):
         super(OpkgPkgsList, self).__init__(d, rootfs_dir)
 
-        self.opkg_cmd = bb.utils.which(os.getenv('PATH'), "opkg-cl")
+        self.opkg_cmd = bb.utils.which(os.getenv('PATH'), "opkg")
         self.opkg_args = "-f %s -o %s " % (config_file, rootfs_dir)
         self.opkg_args += self.d.getVar("OPKG_ARGS", True)
 
-    def list(self, format=None):
-        opkg_query_cmd = bb.utils.which(os.getenv('PATH'), "opkg-query-helper.py")
+    def list_pkgs(self, format=None):
+        cmd = "%s %s status" % (self.opkg_cmd, self.opkg_args)
 
-        if format == "arch":
-            cmd = "%s %s status | %s -a" % \
-                (self.opkg_cmd, self.opkg_args, opkg_query_cmd)
-        elif format == "file":
-            cmd = "%s %s status | %s -f" % \
-                (self.opkg_cmd, self.opkg_args, opkg_query_cmd)
-        elif format == "ver":
-            cmd = "%s %s status | %s -v" % \
-                (self.opkg_cmd, self.opkg_args, opkg_query_cmd)
-        elif format == "deps":
-            cmd = "%s %s status | %s" % \
-                (self.opkg_cmd, self.opkg_args, opkg_query_cmd)
-        else:
-            cmd = "%s %s list_installed | cut -d' ' -f1" % \
-                (self.opkg_cmd, self.opkg_args)
-
-        try:
-            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True).strip()
-        except subprocess.CalledProcessError as e:
+        # opkg returns success even when it printed some
+        # "Collected errors:" report to stderr. Mixing stderr into
+        # stdout then leads to random failures later on when
+        # parsing the output. To avoid this we need to collect both
+        # output streams separately and check for empty stderr.
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+        cmd_output, cmd_stderr = p.communicate()
+        cmd_output = cmd_output.decode("utf-8")
+        cmd_stderr = cmd_stderr.decode("utf-8")
+        if p.returncode or cmd_stderr:
             bb.fatal("Cannot get the installed packages list. Command '%s' "
-                     "returned %d:\n%s" % (cmd, e.returncode, e.output))
+                     "returned %d and stderr:\n%s" % (cmd, p.returncode, cmd_stderr))
 
-        if output and format == "file":
-            tmp_output = ""
-            for line in output.split('\n'):
-                pkg, pkg_file, pkg_arch = line.split()
-                full_path = os.path.join(self.rootfs_dir, pkg_arch, pkg_file)
-                if os.path.exists(full_path):
-                    tmp_output += "%s %s %s\n" % (pkg, full_path, pkg_arch)
-                else:
-                    tmp_output += "%s %s %s\n" % (pkg, pkg_file, pkg_arch)
-
-            output = tmp_output
-
-        return output
+        return opkg_query(cmd_output)
 
 
 class DpkgPkgsList(PkgsList):
-    def list(self, format=None):
+
+    def list_pkgs(self):
         cmd = [bb.utils.which(os.getenv('PATH'), "dpkg-query"),
                "--admindir=%s/var/lib/dpkg" % self.rootfs_dir,
                "-W"]
 
-        if format == "arch":
-            cmd.append("-f=${Package} ${PackageArch}\n")
-        elif format == "file":
-            cmd.append("-f=${Package} ${Package}_${Version}_${Architecture}.deb ${PackageArch}\n")
-        elif format == "ver":
-            cmd.append("-f=${Package} ${PackageArch} ${Version}\n")
-        elif format == "deps":
-            cmd.append("-f=Package: ${Package}\nDepends: ${Depends}\nRecommends: ${Recommends}\n\n")
-        else:
-            cmd.append("-f=${Package}\n")
+        cmd.append("-f=Package: ${Package}\nArchitecture: ${PackageArch}\nVersion: ${Version}\nFile: ${Package}_${Version}_${Architecture}.deb\nDepends: ${Depends}\nRecommends: ${Recommends}\n\n")
 
         try:
-            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT).strip()
+            cmd_output = subprocess.check_output(cmd, stderr=subprocess.STDOUT).strip().decode("utf-8")
         except subprocess.CalledProcessError as e:
             bb.fatal("Cannot get the installed packages list. Command '%s' "
-                     "returned %d:\n%s" % (' '.join(cmd), e.returncode, e.output))
+                     "returned %d:\n%s" % (' '.join(cmd), e.returncode, e.output.decode("utf-8")))
 
-        if format == "file":
-            tmp_output = ""
-            for line in tuple(output.split('\n')):
-                if not line.strip():
-                    continue
-                pkg, pkg_file, pkg_arch = line.split()
-                full_path = os.path.join(self.rootfs_dir, pkg_arch, pkg_file)
-                if os.path.exists(full_path):
-                    tmp_output += "%s %s %s\n" % (pkg, full_path, pkg_arch)
-                else:
-                    tmp_output += "%s %s %s\n" % (pkg, pkg_file, pkg_arch)
-
-            output = tmp_output
-        elif format == "deps":
-            opkg_query_cmd = bb.utils.which(os.getenv('PATH'), "opkg-query-helper.py")
-            file_out = tempfile.NamedTemporaryFile()
-            file_out.write(output)
-            file_out.flush()
-
-            try:
-                output = subprocess.check_output("cat %s | %s" %
-                                                 (file_out.name, opkg_query_cmd),
-                                                 stderr=subprocess.STDOUT,
-                                                 shell=True)
-            except subprocess.CalledProcessError as e:
-                file_out.close()
-                bb.fatal("Cannot compute packages dependencies. Command '%s' "
-                         "returned %d:\n%s" % (e.cmd, e.returncode, e.output))
-
-            file_out.close()
-
-        return output
+        return opkg_query(cmd_output)
 
 
-class PackageManager(object):
+class PackageManager(object, metaclass=ABCMeta):
     """
     This is an abstract class. Do not instantiate this directly.
     """
-    __metaclass__ = ABCMeta
 
     def __init__(self, d):
         self.d = d
         self.deploy_dir = None
         self.deploy_lock = None
         self.feed_uris = self.d.getVar('PACKAGE_FEED_URIS', True) or ""
+        self.feed_base_paths = self.d.getVar('PACKAGE_FEED_BASE_PATHS', True) or ""
+        self.feed_archs = self.d.getVar('PACKAGE_FEED_ARCHS', True)
 
     """
     Update the package manager package database.
@@ -524,7 +553,7 @@ class PackageManager(object):
         pass
 
     @abstractmethod
-    def list_installed(self, format=None):
+    def list_installed(self):
         pass
 
     @abstractmethod
@@ -544,7 +573,9 @@ class PackageManager(object):
         installed_pkgs_file = os.path.join(self.d.getVar('WORKDIR', True),
                                            "installed_pkgs.txt")
         with open(installed_pkgs_file, "w+") as installed_pkgs:
-            installed_pkgs.write(self.list_installed("arch"))
+            pkgs = self.list_installed()
+            output = oe.utils.format_pkg_list(pkgs, "arch")
+            installed_pkgs.write(output)
 
         if globs is None:
             globs = self.d.getVar('IMAGE_INSTALL_COMPLEMENTARY', True)
@@ -567,16 +598,17 @@ class PackageManager(object):
                globs]
         exclude = self.d.getVar('PACKAGE_EXCLUDE_COMPLEMENTARY', True)
         if exclude:
-            cmd.extend(['-x', exclude])
+            cmd.extend(['--exclude=' + '|'.join(exclude.split())])
         try:
             bb.note("Installing complementary packages ...")
-            complementary_pkgs = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
+            bb.note('Running %s' % cmd)
+            complementary_pkgs = subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode("utf-8")
         except subprocess.CalledProcessError as e:
             bb.fatal("Could not compute complementary packages list. Command "
                      "'%s' returned %d:\n%s" %
-                     (' '.join(cmd), e.returncode, e.output))
-
+                     (' '.join(cmd), e.returncode, e.output.decode("utf-8")))
         self.install(complementary_pkgs.split(), attempt_only=True)
+        os.remove(installed_pkgs_file)
 
     def deploy_dir_lock(self):
         if self.deploy_dir is None:
@@ -594,6 +626,25 @@ class PackageManager(object):
 
         self.deploy_lock = None
 
+    """
+    Construct URIs based on the following pattern: uri/base_path where 'uri'
+    and 'base_path' correspond to each element of the corresponding array
+    argument leading to len(uris) x len(base_paths) elements on the returned
+    array
+    """
+    def construct_uris(self, uris, base_paths):
+        def _append(arr1, arr2, sep='/'):
+            res = []
+            narr1 = [a.rstrip(sep) for a in arr1]
+            narr2 = [a.rstrip(sep).lstrip(sep) for a in arr2]
+            for a1 in narr1:
+                if arr2:
+                    for a2 in narr2:
+                        res.append("%s%s%s" % (a1, sep, a2))
+                else:
+                    res.append(a1)
+            return res
+        return _append(uris, base_paths)
 
 class RpmPM(PackageManager):
     def __init__(self,
@@ -616,8 +667,16 @@ class RpmPM(PackageManager):
         self.install_dir_path = os.path.join(self.target_rootfs, self.install_dir_name)
         self.rpm_cmd = bb.utils.which(os.getenv('PATH'), "rpm")
         self.smart_cmd = bb.utils.which(os.getenv('PATH'), "smart")
-        self.smart_opt = "--quiet --data-dir=" + os.path.join(target_rootfs,
-                                                      'var/lib/smart')
+        # 0 = default, only warnings
+        # 1 = --log-level=info (includes information about executing scriptlets and their output)
+        # 2 = --log-level=debug
+        # 3 = --log-level=debug plus dumps of scriplet content and command invocation
+        self.debug_level = int(d.getVar('ROOTFS_RPM_DEBUG', True) or "0")
+        self.smart_opt = "--log-level=%s --data-dir=%s" % \
+                         ("warning" if self.debug_level == 0 else
+                          "info" if self.debug_level == 1 else
+                          "debug",
+                          os.path.join(target_rootfs, 'var/lib/smart'))
         self.scriptlet_wrapper = self.d.expand('${WORKDIR}/scriptlet_wrapper')
         self.solution_manifest = self.d.expand('${T}/saved/%s_solution' %
                                                self.task_name)
@@ -627,9 +686,9 @@ class RpmPM(PackageManager):
         if not os.path.exists(self.d.expand('${T}/saved')):
             bb.utils.mkdirhier(self.d.expand('${T}/saved'))
 
-        self.indexer = RpmIndexer(self.d, self.deploy_dir)
+        packageindex_dir = os.path.join(self.d.getVar('WORKDIR', True), 'rpms')
+        self.indexer = RpmIndexer(self.d, packageindex_dir)
         self.pkgs_list = RpmPkgsList(self.d, self.target_rootfs, arch_var, os_var)
-        self.rpm_version = self.pkgs_list.rpm_version
 
         self.ml_prefix_list, self.ml_os_list = self.indexer.get_ml_prefix_and_os_list(arch_var, os_var)
 
@@ -637,39 +696,56 @@ class RpmPM(PackageManager):
         if self.feed_uris == "":
             return
 
-        # List must be prefered to least preferred order
-        default_platform_extra = set()
-        platform_extra = set()
-        bbextendvariant = self.d.getVar('BBEXTENDVARIANT', True) or ""
-        for mlib in self.ml_os_list:
-            for arch in self.ml_prefix_list[mlib]:
-                plt = arch.replace('-', '_') + '-.*-' + self.ml_os_list[mlib]
-                if mlib == bbextendvariant:
-                        default_platform_extra.add(plt)
-                else:
-                        platform_extra.add(plt)
-
-        platform_extra = platform_extra.union(default_platform_extra)
-
         arch_list = []
-        for canonical_arch in platform_extra:
-            arch = canonical_arch.split('-')[0]
-            if not os.path.exists(os.path.join(self.deploy_dir, arch)):
-                continue
-            arch_list.append(arch)
+        if self.feed_archs is not None:
+            # User define feed architectures
+            arch_list = self.feed_archs.split()
+        else:
+            # List must be prefered to least preferred order
+            default_platform_extra = list()
+            platform_extra = list()
+            bbextendvariant = self.d.getVar('BBEXTENDVARIANT', True) or ""
+            for mlib in self.ml_os_list:
+                for arch in self.ml_prefix_list[mlib]:
+                    plt = arch.replace('-', '_') + '-.*-' + self.ml_os_list[mlib]
+                    if mlib == bbextendvariant:
+                        if plt not in default_platform_extra:
+                            default_platform_extra.append(plt)
+                    else:
+                        if plt not in platform_extra:
+                            platform_extra.append(plt)
+            platform_extra = default_platform_extra + platform_extra
+
+            for canonical_arch in platform_extra:
+                arch = canonical_arch.split('-')[0]
+                if not os.path.exists(os.path.join(self.deploy_dir, arch)):
+                    continue
+                arch_list.append(arch)
+
+        feed_uris = self.construct_uris(self.feed_uris.split(), self.feed_base_paths.split())
 
         uri_iterator = 0
-        channel_priority = 10 + 5 * len(self.feed_uris.split()) * len(arch_list)
+        channel_priority = 10 + 5 * len(feed_uris) * (len(arch_list) if arch_list else 1)
 
-        for uri in self.feed_uris.split():
-            for arch in arch_list:
-                bb.note('Note: adding Smart channel url%d%s (%s)' %
-                        (uri_iterator, arch, channel_priority))
-                self._invoke_smart('channel --add url%d-%s type=rpm-md baseurl=%s/rpm/%s -y'
-                                   % (uri_iterator, arch, uri, arch))
-                self._invoke_smart('channel --set url%d-%s priority=%d' %
-                                   (uri_iterator, arch, channel_priority))
+        for uri in feed_uris:
+            if arch_list:
+                for arch in arch_list:
+                    bb.note('Adding Smart channel url%d%s (%s)' %
+                            (uri_iterator, arch, channel_priority))
+                    self._invoke_smart('channel --add url%d-%s type=rpm-md baseurl=%s/%s -y'
+                                       % (uri_iterator, arch, uri, arch))
+                    self._invoke_smart('channel --set url%d-%s priority=%d' %
+                                       (uri_iterator, arch, channel_priority))
+                    channel_priority -= 5
+            else:
+                bb.note('Adding Smart channel url%d (%s)' %
+                        (uri_iterator, channel_priority))
+                self._invoke_smart('channel --add url%d type=rpm-md baseurl=%s -y'
+                                   % (uri_iterator, uri))
+                self._invoke_smart('channel --set url%d priority=%d' %
+                                   (uri_iterator, channel_priority))
                 channel_priority -= 5
+
             uri_iterator += 1
 
     '''
@@ -704,12 +780,12 @@ class RpmPM(PackageManager):
         try:
             complementary_pkgs = subprocess.check_output(cmd,
                                                          stderr=subprocess.STDOUT,
-                                                         shell=True)
+                                                         shell=True).decode("utf-8")
             # bb.note(complementary_pkgs)
             return complementary_pkgs
         except subprocess.CalledProcessError as e:
             bb.fatal("Could not invoke smart. Command "
-                     "'%s' returned %d:\n%s" % (cmd, e.returncode, e.output))
+                     "'%s' returned %d:\n%s" % (cmd, e.returncode, e.output.decode("utf-8")))
 
     def _search_pkg_name_in_feeds(self, pkg, feed_archs):
         for arch in feed_archs:
@@ -721,6 +797,22 @@ class RpmPM(PackageManager):
                     # First found is best match
                     # bb.note('%s -> %s' % (pkg, pkg + '@' + arch))
                     return pkg + '@' + arch
+
+        # Search provides if not found by pkgname.
+        bb.note('Not found %s by name, searching provides ...' % pkg)
+        cmd = "%s %s query --provides %s --show-format='$name-$version'" % \
+                (self.smart_cmd, self.smart_opt, pkg)
+        cmd += " | sed -ne 's/ *Provides://p'"
+        bb.note('cmd: %s' % cmd)
+        output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True).decode("utf-8")
+        # Found a provider
+        if output:
+            bb.note('Found providers for %s: %s' % (pkg, output))
+            for p in output.split():
+                for arch in feed_archs:
+                    arch = arch.replace('-', '_')
+                    if p.rstrip().endswith('@' + arch):
+                        return p
 
         return ""
 
@@ -747,11 +839,13 @@ class RpmPM(PackageManager):
                     new_pkg = self._search_pkg_name_in_feeds(subst, feed_archs)
                     if not new_pkg:
                         # Failed to translate, package not found!
-                        err_msg = '%s not found in the %s feeds (%s).\n' % \
-                                  (pkg, mlib, " ".join(feed_archs))
+                        err_msg = '%s not found in the %s feeds (%s) in %s.' % \
+                                  (pkg, mlib, " ".join(feed_archs), self.d.getVar('DEPLOY_DIR_RPM', True))
                         if not attempt_only:
-                            err_msg += " ".join(self.fullpkglist)
-                            bb.fatal(err_msg)
+                            bb.error(err_msg)
+                            bb.fatal("This is often caused by an empty package declared " \
+                                     "in a recipe's PACKAGES variable. (Empty packages are " \
+                                     "not constructed unless ALLOW_EMPTY_<pkg> = '1' is used.)")
                         bb.warn(err_msg)
                     else:
                         new_pkgs.append(new_pkg)
@@ -764,11 +858,13 @@ class RpmPM(PackageManager):
                 default_archs = self.ml_prefix_list['default']
                 new_pkg = self._search_pkg_name_in_feeds(pkg, default_archs)
                 if not new_pkg:
-                    err_msg = '%s not found in the base feeds (%s).\n' % \
-                              (pkg, ' '.join(default_archs))
+                    err_msg = '%s not found in the feeds (%s) in %s.' % \
+                                  (pkg, " ".join(default_archs), self.d.getVar('DEPLOY_DIR_RPM', True))
                     if not attempt_only:
-                        err_msg += " ".join(self.fullpkglist)
-                        bb.fatal(err_msg)
+                        bb.error(err_msg)
+                        bb.fatal("This is often caused by an empty package declared " \
+                                 "in a recipe's PACKAGES variable. (Empty packages are " \
+                                 "not constructed unless ALLOW_EMPTY_<pkg> = '1' is used.)")
                     bb.warn(err_msg)
                 else:
                     new_pkgs.append(new_pkg)
@@ -819,51 +915,54 @@ class RpmPM(PackageManager):
         # After change the __db.* cache size, log file will not be
         # generated automatically, that will raise some warnings,
         # so touch a bare log for rpm write into it.
-        if self.rpm_version == 5:
-            rpmlib_log = os.path.join(self.image_rpmlib, 'log', 'log.0000000001')
-            if not os.path.exists(rpmlib_log):
-                bb.utils.mkdirhier(os.path.join(self.image_rpmlib, 'log'))
-                open(rpmlib_log, 'w+').close()
+        rpmlib_log = os.path.join(self.image_rpmlib, 'log', 'log.0000000001')
+        if not os.path.exists(rpmlib_log):
+            bb.utils.mkdirhier(os.path.join(self.image_rpmlib, 'log'))
+            open(rpmlib_log, 'w+').close()
 
-            DB_CONFIG_CONTENT = "# ================ Environment\n" \
-                "set_data_dir .\n" \
-                "set_create_dir .\n" \
-                "set_lg_dir ./log\n" \
-                "set_tmp_dir ./tmp\n" \
-                "set_flags db_log_autoremove on\n" \
-                "\n" \
-                "# -- thread_count must be >= 8\n" \
-                "set_thread_count 64\n" \
-                "\n" \
-                "# ================ Logging\n" \
-                "\n" \
-                "# ================ Memory Pool\n" \
-                "set_cachesize 0 1048576 0\n" \
-                "set_mp_mmapsize 268435456\n" \
-                "\n" \
-                "# ================ Locking\n" \
-                "set_lk_max_locks 16384\n" \
-                "set_lk_max_lockers 16384\n" \
-                "set_lk_max_objects 16384\n" \
-                "mutex_set_max 163840\n" \
-                "\n" \
-                "# ================ Replication\n"
+        DB_CONFIG_CONTENT = "# ================ Environment\n" \
+            "set_data_dir .\n" \
+            "set_create_dir .\n" \
+            "set_lg_dir ./log\n" \
+            "set_tmp_dir ./tmp\n" \
+            "set_flags db_log_autoremove on\n" \
+            "\n" \
+            "# -- thread_count must be >= 8\n" \
+            "set_thread_count 64\n" \
+            "\n" \
+            "# ================ Logging\n" \
+            "\n" \
+            "# ================ Memory Pool\n" \
+            "set_cachesize 0 1048576 0\n" \
+            "set_mp_mmapsize 268435456\n" \
+            "\n" \
+            "# ================ Locking\n" \
+            "set_lk_max_locks 16384\n" \
+            "set_lk_max_lockers 16384\n" \
+            "set_lk_max_objects 16384\n" \
+            "mutex_set_max 163840\n" \
+            "\n" \
+            "# ================ Replication\n"
 
-            db_config_dir = os.path.join(self.image_rpmlib, 'DB_CONFIG')
-            if not os.path.exists(db_config_dir):
-                open(db_config_dir, 'w+').write(DB_CONFIG_CONTENT)
+        db_config_dir = os.path.join(self.image_rpmlib, 'DB_CONFIG')
+        if not os.path.exists(db_config_dir):
+            open(db_config_dir, 'w+').write(DB_CONFIG_CONTENT)
 
         # Create database so that smart doesn't complain (lazy init)
         opt = "-qa"
-        if self.rpm_version == 4:
-            opt = "--initdb"
         cmd = "%s --root %s --dbpath /var/lib/rpm %s > /dev/null" % (
               self.rpm_cmd, self.target_rootfs, opt)
         try:
             subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
         except subprocess.CalledProcessError as e:
             bb.fatal("Create rpm database failed. Command '%s' "
-                     "returned %d:\n%s" % (cmd, e.returncode, e.output))
+                     "returned %d:\n%s" % (cmd, e.returncode, e.output.decode("utf-8")))
+        # Import GPG key to RPM database of the target system
+        if self.d.getVar('RPM_SIGN_PACKAGES', True) == '1':
+            pubkey_path = self.d.getVar('RPM_GPG_PUBKEY', True)
+            cmd = "%s --root %s --dbpath /var/lib/rpm --import %s > /dev/null" % (
+                  self.rpm_cmd, self.target_rootfs, pubkey_path)
+            subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
 
         # Configure smart
         bb.note("configuring Smart settings")
@@ -917,9 +1016,19 @@ class RpmPM(PackageManager):
         ch_already_added = []
         for canonical_arch in platform_extra:
             arch = canonical_arch.split('-')[0]
-            arch_channel = os.path.join(self.deploy_dir, arch)
-            if os.path.exists(arch_channel) and not arch in ch_already_added:
-                bb.note('Note: adding Smart channel %s (%s)' %
+            arch_channel = os.path.join(self.d.getVar('WORKDIR', True), 'rpms', arch)
+            oe.path.remove(arch_channel)
+            deploy_arch_dir = os.path.join(self.deploy_dir, arch)
+            if not os.path.exists(deploy_arch_dir):
+                    continue
+
+            lockfilename = self.d.getVar('DEPLOY_DIR_RPM', True) + "/rpm.lock"
+            lf = bb.utils.lockfile(lockfilename, False)
+            oe.path.copyhardlinktree(deploy_arch_dir, arch_channel)
+            bb.utils.unlockfile(lf)
+
+            if not arch in ch_already_added:
+                bb.note('Adding Smart channel %s (%s)' %
                         (arch, channel_priority))
                 self._invoke_smart('channel --add %s type=rpm-md baseurl=%s -y'
                                    % (arch, arch_channel))
@@ -937,12 +1046,19 @@ class RpmPM(PackageManager):
         # If we ever run into needing more the 899 scripts, we'll have to.
         # change num to start with 1000.
         #
-        if self.rpm_version == 4:
-            scriptletcmd = "$2 $3 $4\n"
-            scriptpath = "$3"
+        scriptletcmd = "$2 $1/$3 $4\n"
+        scriptpath = "$1/$3"
+
+        # When self.debug_level >= 3, also dump the content of the
+        # executed scriptlets and how they get invoked.  We have to
+        # replace "exit 1" and "ERR" because printing those as-is
+        # would trigger a log analysis failure.
+        if self.debug_level >= 3:
+            dump_invocation = 'echo "Executing ${name} ${kind} with: ' + scriptletcmd + '"\n'
+            dump_script = 'cat ' + scriptpath + '| sed -e "s/exit 1/exxxit 1/g" -e "s/ERR/IRR/g"; echo\n'
         else:
-            scriptletcmd = "$2 $1/$3 $4\n"
-            scriptpath = "$1/$3"
+            dump_invocation = 'echo "Executing ${name} ${kind}"\n'
+            dump_script = ''
 
         SCRIPTLET_FORMAT = "#!/bin/bash\n" \
             "\n" \
@@ -954,19 +1070,25 @@ class RpmPM(PackageManager):
             "export INTERCEPT_DIR=%s\n" \
             "export NATIVE_ROOT=%s\n" \
             "\n" \
+            "name=`head -1 " + scriptpath + " | cut -d\' \' -f 2`\n" \
+            "kind=`head -1 " + scriptpath + " | cut -d\' \' -f 4`\n" \
+            + dump_invocation \
+            + dump_script \
             + scriptletcmd + \
-            "if [ $? -ne 0 ]; then\n" \
+            "ret=$?\n" \
+            "echo Result of ${name} ${kind}: ${ret}\n" \
+            "if [ ${ret} -ne 0 ]; then\n" \
             "  if [ $4 -eq 1 ]; then\n" \
             "    mkdir -p $1/etc/rpm-postinsts\n" \
             "    num=100\n" \
             "    while [ -e $1/etc/rpm-postinsts/${num}-* ]; do num=$((num + 1)); done\n" \
-            "    name=`head -1 " + scriptpath + " | cut -d\' \' -f 2`\n" \
             '    echo "#!$2" > $1/etc/rpm-postinsts/${num}-${name}\n' \
             '    echo "# Arg: $4" >> $1/etc/rpm-postinsts/${num}-${name}\n' \
             "    cat " + scriptpath + " >> $1/etc/rpm-postinsts/${num}-${name}\n" \
             "    chmod +x $1/etc/rpm-postinsts/${num}-${name}\n" \
+            '    echo "Info: deferring ${name} ${kind} install scriptlet to first boot"\n' \
             "  else\n" \
-            '    echo "Error: pre/post remove scriptlet failed"\n' \
+            '    echo "Error: ${name} ${kind} remove scriptlet failed"\n' \
             "  fi\n" \
             "fi\n"
 
@@ -978,8 +1100,8 @@ class RpmPM(PackageManager):
                                                 native_root)
         open(self.scriptlet_wrapper, 'w+').write(scriptlet_content)
 
-        bb.note("Note: configuring RPM cross-install scriptlet_wrapper")
-        os.chmod(self.scriptlet_wrapper, 0755)
+        bb.note("configuring RPM cross-install scriptlet_wrapper")
+        os.chmod(self.scriptlet_wrapper, 0o755)
         cmd = 'config --set rpm-extra-macros._cross_scriptlet_wrapper=%s' % \
               self.scriptlet_wrapper
         self._invoke_smart(cmd)
@@ -990,16 +1112,99 @@ class RpmPM(PackageManager):
     def update(self):
         self._invoke_smart('update rpmsys')
 
+    def get_rdepends_recursively(self, pkgs):
+        # pkgs will be changed during the loop, so use [:] to make a copy.
+        for pkg in pkgs[:]:
+            sub_data = oe.packagedata.read_subpkgdata(pkg, self.d)
+            sub_rdep = sub_data.get("RDEPENDS_" + pkg)
+            if not sub_rdep:
+                continue
+            done = list(bb.utils.explode_dep_versions2(sub_rdep).keys())
+            next = done
+            # Find all the rdepends on dependency chain
+            while next:
+                new = []
+                for sub_pkg in next:
+                    sub_data = oe.packagedata.read_subpkgdata(sub_pkg, self.d)
+                    sub_pkg_rdep = sub_data.get("RDEPENDS_" + sub_pkg)
+                    if not sub_pkg_rdep:
+                        continue
+                    for p in bb.utils.explode_dep_versions2(sub_pkg_rdep):
+                        # Already handled, skip it.
+                        if p in done or p in pkgs:
+                            continue
+                        # It's a new dep
+                        if oe.packagedata.has_subpkgdata(p, self.d):
+                            done.append(p)
+                            new.append(p)
+                next = new
+            pkgs.extend(done)
+        return pkgs
+
     '''
     Install pkgs with smart, the pkg name is oe format
     '''
     def install(self, pkgs, attempt_only=False):
 
-        bb.note("Installing the following packages: %s" % ' '.join(pkgs))
-        if attempt_only and len(pkgs) == 0:
+        if not pkgs:
+            bb.note("There are no packages to install")
             return
-        pkgs = self._pkg_translate_oe_to_smart(pkgs, attempt_only)
+        bb.note("Installing the following packages: %s" % ' '.join(pkgs))
+        if not attempt_only:
+            # Pull in multilib requires since rpm may not pull in them
+            # correctly, for example,
+            # lib32-packagegroup-core-standalone-sdk-target requires
+            # lib32-libc6, but rpm may pull in libc6 rather than lib32-libc6
+            # since it doesn't know mlprefix (lib32-), bitbake knows it and
+            # can handle it well, find out the RDEPENDS on the chain will
+            # fix the problem. Both do_rootfs and do_populate_sdk have this
+            # issue.
+            # The attempt_only packages don't need this since they are
+            # based on the installed ones.
+            #
+            # Separate pkgs into two lists, one is multilib, the other one
+            # is non-multilib.
+            ml_pkgs = []
+            non_ml_pkgs = pkgs[:]
+            for pkg in pkgs:
+                for mlib in (self.d.getVar("MULTILIB_VARIANTS", True) or "").split():
+                    if pkg.startswith(mlib + '-'):
+                        ml_pkgs.append(pkg)
+                        non_ml_pkgs.remove(pkg)
 
+            if len(ml_pkgs) > 0 and len(non_ml_pkgs) > 0:
+                # Found both foo and lib-foo
+                ml_pkgs = self.get_rdepends_recursively(ml_pkgs)
+                non_ml_pkgs = self.get_rdepends_recursively(non_ml_pkgs)
+                # Longer list makes smart slower, so only keep the pkgs
+                # which have the same BPN, and smart can handle others
+                # correctly.
+                pkgs_new = []
+                for pkg in non_ml_pkgs:
+                    for mlib in (self.d.getVar("MULTILIB_VARIANTS", True) or "").split():
+                        mlib_pkg = mlib + "-" + pkg
+                        if mlib_pkg in ml_pkgs:
+                            pkgs_new.append(pkg)
+                            pkgs_new.append(mlib_pkg)
+                for pkg in pkgs:
+                    if pkg not in pkgs_new:
+                        pkgs_new.append(pkg)
+                pkgs = pkgs_new
+                new_depends = {}
+                deps = bb.utils.explode_dep_versions2(" ".join(pkgs))
+                for depend in deps:
+                    data = oe.packagedata.read_subpkgdata(depend, self.d)
+                    key = "PKG_%s" % depend
+                    if key in data:
+                        new_depend = data[key]
+                    else:
+                        new_depend = depend
+                    new_depends[new_depend] = deps[depend]
+                pkgs = bb.utils.join_deps(new_depends, commasep=True).split(', ')
+        pkgs = self._pkg_translate_oe_to_smart(pkgs, attempt_only)
+        if not pkgs:
+            bb.note("There are no packages to install")
+            return
         if not attempt_only:
             bb.note('to be installed: %s' % ' '.join(pkgs))
             cmd = "%s %s install -y %s" % \
@@ -1011,11 +1216,11 @@ class RpmPM(PackageManager):
             cmd = "%s %s install --attempt -y %s" % \
                   (self.smart_cmd, self.smart_opt, ' '.join(pkgs))
         try:
-            output = subprocess.check_output(cmd.split(), stderr=subprocess.STDOUT)
+            output = subprocess.check_output(cmd.split(), stderr=subprocess.STDOUT).decode("utf-8")
             bb.note(output)
         except subprocess.CalledProcessError as e:
             bb.fatal("Unable to install packages. Command '%s' "
-                     "returned %d:\n%s" % (cmd, e.returncode, e.output))
+                     "returned %d:\n%s" % (cmd, e.returncode, e.output.decode("utf-8")))
 
     '''
     Remove pkgs with smart, the pkg name is smart/rpm format
@@ -1041,11 +1246,11 @@ class RpmPM(PackageManager):
 
         try:
             bb.note(cmd)
-            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True).decode("utf-8")
             bb.note(output)
         except subprocess.CalledProcessError as e:
             bb.note("Unable to remove packages. Command '%s' "
-                    "returned %d:\n%s" % (cmd, e.returncode, e.output))
+                    "returned %d:\n%s" % (cmd, e.returncode, e.output.decode("utf-8")))
 
     def upgrade(self):
         bb.note('smart upgrade')
@@ -1085,8 +1290,8 @@ class RpmPM(PackageManager):
                             self.image_rpmlib,
                             symlinks=True)
 
-    def list_installed(self, format=None):
-        return self.pkgs_list.list(format)
+    def list_installed(self):
+        return self.pkgs_list.list_pkgs()
 
     '''
     If incremental install, we need to determine what we've got,
@@ -1118,7 +1323,7 @@ class RpmPM(PackageManager):
                         install_pkgs.append(pkg)
         except subprocess.CalledProcessError as e:
             bb.note("Unable to dump install packages. Command '%s' "
-                    "returned %d:\n%s" % (cmd, e.returncode, e.output))
+                    "returned %d:\n%s" % (cmd, e.returncode, e.output.decode("utf-8")))
         # Recovery rpmsys channel
         self._invoke_smart('channel --enable rpmsys')
         return install_pkgs
@@ -1160,14 +1365,14 @@ class RpmPM(PackageManager):
                         available_pkgs.append(pkg.strip())
         except subprocess.CalledProcessError as e:
             bb.note("Unable to list all available packages. Command '%s' "
-                    "returned %d:\n%s" % (cmd, e.returncode, e.output))
+                    "returned %d:\n%s" % (cmd, e.returncode, e.output.decode("utf-8")))
 
         self.fullpkglist = available_pkgs
 
         return
 
     def save_rpmpostinst(self, pkg):
-        mlibs = (self.d.getVar('MULTILIB_GLOBAL_VARIANTS') or "").split()
+        mlibs = (self.d.getVar('MULTILIB_GLOBAL_VARIANTS', False) or "").split()
 
         new_pkg = pkg
         # Remove any multilib prefix from the package name
@@ -1187,12 +1392,12 @@ class RpmPM(PackageManager):
 
         try:
             bb.note(cmd)
-            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True).strip()
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True).strip().decode("utf-8")
             bb.note(output)
-            os.chmod(saved_dir, 0755)
+            os.chmod(saved_dir, 0o755)
         except subprocess.CalledProcessError as e:
             bb.fatal("Invoke save_rpmpostinst failed. Command '%s' "
-                     "returned %d:\n%s" % (cmd, e.returncode, e.output))
+                     "returned %d:\n%s" % (cmd, e.returncode, e.output.decode("utf-8")))
 
     '''Write common configuration for target usage'''
     def rpm_setup_smart_target_config(self):
@@ -1216,8 +1421,157 @@ class RpmPM(PackageManager):
         for f in rpm_db_locks:
             bb.utils.remove(f, True)
 
+    """
+    Returns a dictionary with the package info.
+    """
+    def package_info(self, pkg):
+        cmd = "%s %s info --urls %s" % (self.smart_cmd, self.smart_opt, pkg)
+        try:
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True).decode("utf-8")
+        except subprocess.CalledProcessError as e:
+            bb.fatal("Unable to list available packages. Command '%s' "
+                     "returned %d:\n%s" % (cmd, e.returncode, e.output.decode("utf-8")))
 
-class OpkgPM(PackageManager):
+        # Set default values to avoid UnboundLocalError
+        arch = ""
+        ver = ""
+        filename = ""
+
+        #Parse output
+        for line in output.splitlines():
+            line = line.rstrip()
+            if line.startswith("Name:"):
+                pkg = line.split(": ")[1]
+            elif line.startswith("Version:"):
+                tmp_str = line.split(": ")[1]
+                ver, arch = tmp_str.split("@")
+                break
+
+        # Get filename
+        index = re.search("^URLs", output, re.MULTILINE)
+        tmp_str = output[index.end():]
+        for line in tmp_str.splitlines():
+            if "/" in line:
+                line = line.lstrip()
+                filename = line.split(" ")[0]
+                break
+
+        # To have the same data type than other package_info methods
+        filepath = os.path.join(self.deploy_dir, arch, filename)
+        pkg_dict = {}
+        pkg_dict[pkg] = {"arch":arch, "ver":ver, "filename":filename,
+                         "filepath": filepath}
+
+        return pkg_dict
+
+    """
+    Returns the path to a tmpdir where resides the contents of a package.
+
+    Deleting the tmpdir is responsability of the caller.
+
+    """
+    def extract(self, pkg):
+        pkg_info = self.package_info(pkg)
+        if not pkg_info:
+            bb.fatal("Unable to get information for package '%s' while "
+                     "trying to extract the package."  % pkg)
+
+        pkg_path = pkg_info[pkg]["filepath"]
+
+        cpio_cmd = bb.utils.which(os.getenv("PATH"), "cpio")
+        rpm2cpio_cmd = bb.utils.which(os.getenv("PATH"), "rpm2cpio")
+
+        if not os.path.isfile(pkg_path):
+            bb.fatal("Unable to extract package for '%s'."
+                     "File %s doesn't exists" % (pkg, pkg_path))
+
+        tmp_dir = tempfile.mkdtemp()
+        current_dir = os.getcwd()
+        os.chdir(tmp_dir)
+
+        try:
+            cmd = "%s %s | %s -idmv" % (rpm2cpio_cmd, pkg_path, cpio_cmd)
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
+        except subprocess.CalledProcessError as e:
+            bb.utils.remove(tmp_dir, recurse=True)
+            bb.fatal("Unable to extract %s package. Command '%s' "
+                     "returned %d:\n%s" % (pkg_path, cmd, e.returncode, e.output.decode("utf-8")))
+        except OSError as e:
+            bb.utils.remove(tmp_dir, recurse=True)
+            bb.fatal("Unable to extract %s package. Command '%s' "
+                     "returned %d:\n%s at %s" % (pkg_path, cmd, e.errno, e.strerror, e.filename))
+
+        bb.note("Extracted %s to %s" % (pkg_path, tmp_dir))
+        os.chdir(current_dir)
+
+        return tmp_dir
+
+
+class OpkgDpkgPM(PackageManager):
+    """
+    This is an abstract class. Do not instantiate this directly.
+    """
+    def __init__(self, d):
+        super(OpkgDpkgPM, self).__init__(d)
+
+    """
+    Returns a dictionary with the package info.
+
+    This method extracts the common parts for Opkg and Dpkg
+    """
+    def package_info(self, pkg, cmd):
+
+        try:
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True).decode("utf-8")
+        except subprocess.CalledProcessError as e:
+            bb.fatal("Unable to list available packages. Command '%s' "
+                     "returned %d:\n%s" % (cmd, e.returncode, e.output.decode("utf-8")))
+        return opkg_query(output)
+
+    """
+    Returns the path to a tmpdir where resides the contents of a package.
+
+    Deleting the tmpdir is responsability of the caller.
+
+    This method extracts the common parts for Opkg and Dpkg
+    """
+    def extract(self, pkg, pkg_info):
+
+        ar_cmd = bb.utils.which(os.getenv("PATH"), "ar")
+        tar_cmd = bb.utils.which(os.getenv("PATH"), "tar")
+        pkg_path = pkg_info[pkg]["filepath"]
+
+        if not os.path.isfile(pkg_path):
+            bb.fatal("Unable to extract package for '%s'."
+                     "File %s doesn't exists" % (pkg, pkg_path))
+
+        tmp_dir = tempfile.mkdtemp()
+        current_dir = os.getcwd()
+        os.chdir(tmp_dir)
+
+        try:
+            cmd = "%s x %s" % (ar_cmd, pkg_path)
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
+            cmd = "%s xf data.tar.*" % tar_cmd
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
+        except subprocess.CalledProcessError as e:
+            bb.utils.remove(tmp_dir, recurse=True)
+            bb.fatal("Unable to extract %s package. Command '%s' "
+                     "returned %d:\n%s" % (pkg_path, cmd, e.returncode, e.output.decode("utf-8")))
+        except OSError as e:
+            bb.utils.remove(tmp_dir, recurse=True)
+            bb.fatal("Unable to extract %s package. Command '%s' "
+                     "returned %d:\n%s at %s" % (pkg_path, cmd, e.errno, e.strerror, e.filename))
+
+        bb.note("Extracted %s to %s" % (pkg_path, tmp_dir))
+        bb.utils.remove(os.path.join(tmp_dir, "debian-binary"))
+        bb.utils.remove(os.path.join(tmp_dir, "control.tar.gz"))
+        os.chdir(current_dir)
+
+        return tmp_dir
+
+
+class OpkgPM(OpkgDpkgPM):
     def __init__(self, d, target_rootfs, config_file, archs, task_name='target'):
         super(OpkgPM, self).__init__(d)
 
@@ -1228,8 +1582,8 @@ class OpkgPM(PackageManager):
 
         self.deploy_dir = self.d.getVar("DEPLOY_DIR_IPK", True)
         self.deploy_lock_file = os.path.join(self.deploy_dir, "deploy.lock")
-        self.opkg_cmd = bb.utils.which(os.getenv('PATH'), "opkg-cl")
-        self.opkg_args = "-f %s -o %s " % (self.config_file, target_rootfs)
+        self.opkg_cmd = bb.utils.which(os.getenv('PATH'), "opkg")
+        self.opkg_args = "--volatile-cache -f %s -t %s -o %s " % (self.config_file, self.d.expand('${T}/ipktemp/') ,target_rootfs)
         self.opkg_args += self.d.getVar("OPKG_ARGS", True)
 
         opkg_lib_dir = self.d.getVar('OPKGLIBDIR', True)
@@ -1244,10 +1598,11 @@ class OpkgPM(PackageManager):
         if not os.path.exists(self.d.expand('${T}/saved')):
             bb.utils.mkdirhier(self.d.expand('${T}/saved'))
 
-        if (self.d.getVar('BUILD_IMAGES_FROM_FEEDS', True) or "") != "1":
-            self._create_config()
-        else:
+        self.from_feeds = (self.d.getVar('BUILD_IMAGES_FROM_FEEDS', True) or "") == "1"
+        if self.from_feeds:
             self._create_custom_config()
+        else:
+            self._create_config()
 
         self.indexer = OpkgIndexer(self.d, self.deploy_dir)
 
@@ -1318,6 +1673,16 @@ class OpkgPM(PackageManager):
                                         self.d.getVar('FEED_DEPLOYDIR_BASE_URI', True),
                                         arch))
 
+                        if self.opkg_dir != '/var/lib/opkg':
+                            # There is no command line option for this anymore, we need to add
+                            # info_dir and status_file to config file, if OPKGLIBDIR doesn't have
+                            # the default value of "/var/lib" as defined in opkg:
+                            # libopkg/opkg_conf.h:#define OPKG_CONF_DEFAULT_INFO_DIR      "/var/lib/opkg/info"
+                            # libopkg/opkg_conf.h:#define OPKG_CONF_DEFAULT_STATUS_FILE   "/var/lib/opkg/status"
+                            cfg_file.write("option info_dir     %s\n" % os.path.join(self.d.getVar('OPKGLIBDIR', True), 'opkg', 'info'))
+                            cfg_file.write("option status_file  %s\n" % os.path.join(self.d.getVar('OPKGLIBDIR', True), 'opkg', 'status'))
+
+
     def _create_config(self):
         with open(self.config_file, "w+") as config_file:
             priority = 1
@@ -1333,6 +1698,15 @@ class OpkgPM(PackageManager):
                     config_file.write("src oe-%s file:%s\n" %
                                       (arch, pkgs_dir))
 
+            if self.opkg_dir != '/var/lib/opkg':
+                # There is no command line option for this anymore, we need to add
+                # info_dir and status_file to config file, if OPKGLIBDIR doesn't have
+                # the default value of "/var/lib" as defined in opkg:
+                # libopkg/opkg_conf.h:#define OPKG_CONF_DEFAULT_INFO_DIR      "/var/lib/opkg/info"
+                # libopkg/opkg_conf.h:#define OPKG_CONF_DEFAULT_STATUS_FILE   "/var/lib/opkg/status"
+                config_file.write("option info_dir     %s\n" % os.path.join(self.d.getVar('OPKGLIBDIR', True), 'opkg', 'info'))
+                config_file.write("option status_file  %s\n" % os.path.join(self.d.getVar('OPKGLIBDIR', True), 'opkg', 'status'))
+
     def insert_feeds_uris(self):
         if self.feed_uris == "":
             return
@@ -1340,20 +1714,26 @@ class OpkgPM(PackageManager):
         rootfs_config = os.path.join('%s/etc/opkg/base-feeds.conf'
                                   % self.target_rootfs)
 
+        feed_uris = self.construct_uris(self.feed_uris.split(), self.feed_base_paths.split())
+        archs = self.pkg_archs.split() if self.feed_archs is None else self.feed_archs.split()
+
         with open(rootfs_config, "w+") as config_file:
             uri_iterator = 0
-            for uri in self.feed_uris.split():
-                config_file.write("src/gz url-%d %s/ipk\n" %
-                                  (uri_iterator, uri))
+            for uri in feed_uris:
+                if archs:
+                    for arch in archs:
+                        if (self.feed_archs is None) and (not os.path.exists(os.path.join(self.deploy_dir, arch))):
+                            continue
+                        bb.note('Adding opkg feed url-%s-%d (%s)' %
+                            (arch, uri_iterator, uri))
+                        config_file.write("src/gz uri-%s-%d %s/%s\n" %
+                                          (arch, uri_iterator, uri, arch))
+                else:
+                    bb.note('Adding opkg feed url-%d (%s)' %
+                        (uri_iterator, uri))
+                    config_file.write("src/gz uri-%d %s\n" %
+                                      (uri_iterator, uri))
 
-                for arch in self.pkg_archs.split():
-                    if not os.path.exists(os.path.join(self.deploy_dir, arch)):
-                        continue
-                    bb.note('Note: adding opkg channel url-%s-%d (%s)' %
-                        (arch, uri_iterator, uri))
-
-                    config_file.write("src/gz uri-%s-%d %s/ipk/%s\n" %
-                                      (arch, uri_iterator, uri, arch))
                 uri_iterator += 1
 
     def update(self):
@@ -1366,12 +1746,12 @@ class OpkgPM(PackageManager):
         except subprocess.CalledProcessError as e:
             self.deploy_dir_unlock()
             bb.fatal("Unable to update the package index files. Command '%s' "
-                     "returned %d:\n%s" % (cmd, e.returncode, e.output))
+                     "returned %d:\n%s" % (cmd, e.returncode, e.output.decode("utf-8")))
 
         self.deploy_dir_unlock()
 
     def install(self, pkgs, attempt_only=False):
-        if attempt_only and len(pkgs) == 0:
+        if not pkgs:
             return
 
         cmd = "%s %s install %s" % (self.opkg_cmd, self.opkg_args, ' '.join(pkgs))
@@ -1387,16 +1767,16 @@ class OpkgPM(PackageManager):
         try:
             bb.note("Installing the following packages: %s" % ' '.join(pkgs))
             bb.note(cmd)
-            output = subprocess.check_output(cmd.split(), stderr=subprocess.STDOUT)
+            output = subprocess.check_output(cmd.split(), stderr=subprocess.STDOUT).decode("utf-8")
             bb.note(output)
         except subprocess.CalledProcessError as e:
             (bb.fatal, bb.note)[attempt_only]("Unable to install packages. "
                                               "Command '%s' returned %d:\n%s" %
-                                              (cmd, e.returncode, e.output))
+                                              (cmd, e.returncode, e.output.decode("utf-8")))
 
     def remove(self, pkgs, with_dependencies=True):
         if with_dependencies:
-            cmd = "%s %s --force-depends --force-remove --force-removal-of-dependent-packages remove %s" % \
+            cmd = "%s %s --force-remove --force-removal-of-dependent-packages remove %s" % \
                 (self.opkg_cmd, self.opkg_args, ' '.join(pkgs))
         else:
             cmd = "%s %s --force-depends remove %s" % \
@@ -1404,11 +1784,11 @@ class OpkgPM(PackageManager):
 
         try:
             bb.note(cmd)
-            output = subprocess.check_output(cmd.split(), stderr=subprocess.STDOUT)
+            output = subprocess.check_output(cmd.split(), stderr=subprocess.STDOUT).decode("utf-8")
             bb.note(output)
         except subprocess.CalledProcessError as e:
             bb.fatal("Unable to remove packages. Command '%s' "
-                     "returned %d:\n%s" % (e.cmd, e.returncode, e.output))
+                     "returned %d:\n%s" % (e.cmd, e.returncode, e.output.decode("utf-8")))
 
     def write_index(self):
         self.deploy_dir_lock()
@@ -1425,8 +1805,12 @@ class OpkgPM(PackageManager):
         # create the directory back, it's needed by PM lock
         bb.utils.mkdirhier(self.opkg_dir)
 
-    def list_installed(self, format=None):
-        return OpkgPkgsList(self.d, self.target_rootfs, self.config_file).list(format)
+    def remove_lists(self):
+        if not self.from_feeds:
+            bb.utils.remove(os.path.join(self.opkg_dir, "lists"), True)
+
+    def list_installed(self):
+        return OpkgPkgsList(self.d, self.target_rootfs, self.config_file).list_pkgs()
 
     def handle_bad_recommendations(self):
         bad_recommendations = self.d.getVar("BAD_RECOMMENDATIONS", True) or ""
@@ -1447,10 +1831,10 @@ class OpkgPM(PackageManager):
                 pkg_info = cmd + pkg
 
                 try:
-                    output = subprocess.check_output(pkg_info.split(), stderr=subprocess.STDOUT).strip()
+                    output = subprocess.check_output(pkg_info.split(), stderr=subprocess.STDOUT).strip().decode("utf-8")
                 except subprocess.CalledProcessError as e:
                     bb.fatal("Cannot get package info. Command '%s' "
-                             "returned %d:\n%s" % (pkg_info, e.returncode, e.output))
+                             "returned %d:\n%s" % (pkg_info, e.returncode, e.output.decode("utf-8")))
 
                 if output == "":
                     bb.note("Ignored bad recommendation: '%s' is "
@@ -1487,7 +1871,7 @@ class OpkgPM(PackageManager):
             subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
         except subprocess.CalledProcessError as e:
             bb.fatal("Unable to update. Command '%s' "
-                     "returned %d:\n%s" % (cmd, e.returncode, e.output))
+                     "returned %d:\n%s" % (cmd, e.returncode, e.output.decode("utf-8")))
 
         # Dummy installation
         cmd = "%s %s --noaction install %s " % (self.opkg_cmd,
@@ -1497,7 +1881,7 @@ class OpkgPM(PackageManager):
             output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
         except subprocess.CalledProcessError as e:
             bb.fatal("Unable to dummy install packages. Command '%s' "
-                     "returned %d:\n%s" % (cmd, e.returncode, e.output))
+                     "returned %d:\n%s" % (cmd, e.returncode, e.output.decode("utf-8")))
 
         bb.utils.remove(temp_rootfs, True)
 
@@ -1522,8 +1906,37 @@ class OpkgPM(PackageManager):
                             self.opkg_dir,
                             symlinks=True)
 
+    """
+    Returns a dictionary with the package info.
+    """
+    def package_info(self, pkg):
+        cmd = "%s %s info %s" % (self.opkg_cmd, self.opkg_args, pkg)
+        pkg_info = super(OpkgPM, self).package_info(pkg, cmd)
 
-class DpkgPM(PackageManager):
+        pkg_arch = pkg_info[pkg]["arch"]
+        pkg_filename = pkg_info[pkg]["filename"]
+        pkg_info[pkg]["filepath"] = \
+                os.path.join(self.deploy_dir, pkg_arch, pkg_filename)
+
+        return pkg_info
+
+    """
+    Returns the path to a tmpdir where resides the contents of a package.
+
+    Deleting the tmpdir is responsability of the caller.
+    """
+    def extract(self, pkg):
+        pkg_info = self.package_info(pkg)
+        if not pkg_info:
+            bb.fatal("Unable to get information for package '%s' while "
+                     "trying to extract the package."  % pkg)
+
+        tmp_dir = super(OpkgPM, self).extract(pkg, pkg_info)
+        bb.utils.remove(os.path.join(tmp_dir, "data.tar.gz"))
+
+        return tmp_dir
+
+class DpkgPM(OpkgDpkgPM):
     def __init__(self, d, target_rootfs, archs, base_archs, apt_conf_dir=None):
         super(DpkgPM, self).__init__(d)
         self.target_rootfs = target_rootfs
@@ -1534,11 +1947,12 @@ class DpkgPM(PackageManager):
             self.apt_conf_dir = apt_conf_dir
         self.apt_conf_file = os.path.join(self.apt_conf_dir, "apt.conf")
         self.apt_get_cmd = bb.utils.which(os.getenv('PATH'), "apt-get")
+        self.apt_cache_cmd = bb.utils.which(os.getenv('PATH'), "apt-cache")
 
         self.apt_args = d.getVar("APT_ARGS", True)
 
         self.all_arch_list = archs.split()
-        all_mlb_pkg_arch_list = (self.d.getVar('ALL_MULTILIB_PACKAGE_ARCHS', True) or "").replace('-', '_').split()
+        all_mlb_pkg_arch_list = (self.d.getVar('ALL_MULTILIB_PACKAGE_ARCHS', True) or "").split()
         self.all_arch_list.extend(arch for arch in all_mlb_pkg_arch_list if arch not in self.all_arch_list)
 
         self._create_configs(archs, base_archs)
@@ -1611,7 +2025,7 @@ class DpkgPM(PackageManager):
                         subprocess.check_output(p_full, stderr=subprocess.STDOUT)
                     except subprocess.CalledProcessError as e:
                         bb.note("%s for package %s failed with %d:\n%s" %
-                                (suffix[1], pkg_name, e.returncode, e.output))
+                                (suffix[1], pkg_name, e.returncode, e.output.decode("utf-8")))
                         failed_pkgs.append(pkg_name)
                         break
 
@@ -1629,7 +2043,7 @@ class DpkgPM(PackageManager):
             subprocess.check_output(cmd.split(), stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             bb.fatal("Unable to update the package index files. Command '%s' "
-                     "returned %d:\n%s" % (e.cmd, e.returncode, e.output))
+                     "returned %d:\n%s" % (e.cmd, e.returncode, e.output.decode("utf-8")))
 
         self.deploy_dir_unlock()
 
@@ -1648,7 +2062,7 @@ class DpkgPM(PackageManager):
         except subprocess.CalledProcessError as e:
             (bb.fatal, bb.note)[attempt_only]("Unable to install packages. "
                                               "Command '%s' returned %d:\n%s" %
-                                              (cmd, e.returncode, e.output))
+                                              (cmd, e.returncode, e.output.decode("utf-8")))
 
         # rename *.dpkg-new files/dirs
         for root, dirs, files in os.walk(self.target_rootfs):
@@ -1679,7 +2093,7 @@ class DpkgPM(PackageManager):
             subprocess.check_output(cmd.split(), stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             bb.fatal("Unable to remove packages. Command '%s' "
-                     "returned %d:\n%s" % (e.cmd, e.returncode, e.output))
+                     "returned %d:\n%s" % (e.cmd, e.returncode, e.output.decode("utf-8")))
 
     def write_index(self):
         self.deploy_dir_lock()
@@ -1699,17 +2113,26 @@ class DpkgPM(PackageManager):
                                     % self.target_rootfs)
         arch_list = []
 
-        for arch in self.all_arch_list:
-            if not os.path.exists(os.path.join(self.deploy_dir, arch)):
-                continue
-            arch_list.append(arch)
+        if self.feed_archs is None:
+            for arch in self.all_arch_list:
+                if not os.path.exists(os.path.join(self.deploy_dir, arch)):
+                    continue
+                arch_list.append(arch)
+        else:
+            arch_list = self.feed_archs.split()
+
+        feed_uris = self.construct_uris(self.feed_uris.split(), self.feed_base_paths.split())
 
         with open(sources_conf, "w+") as sources_file:
-            for uri in self.feed_uris.split():
-                for arch in arch_list:
-                    bb.note('Note: adding dpkg channel at (%s)' % uri)
-                    sources_file.write("deb %s/deb/%s ./\n" %
-                                       (uri, arch))
+            for uri in feed_uris:
+                if arch_list:
+                    for arch in arch_list:
+                        bb.note('Adding dpkg channel at (%s)' % uri)
+                        sources_file.write("deb %s/%s ./\n" %
+                                           (uri, arch))
+                else:
+                    bb.note('Adding dpkg channel at (%s)' % uri)
+                    sources_file.write("deb %s ./\n" % uri)
 
     def _create_configs(self, archs, base_archs):
         base_archs = re.sub("_", "-", base_archs)
@@ -1720,6 +2143,7 @@ class DpkgPM(PackageManager):
         bb.utils.mkdirhier(self.apt_conf_dir)
         bb.utils.mkdirhier(self.apt_conf_dir + "/lists/partial/")
         bb.utils.mkdirhier(self.apt_conf_dir + "/apt.conf.d/")
+        bb.utils.mkdirhier(self.apt_conf_dir + "/preferences.d/")
 
         arch_list = []
         for arch in self.all_arch_list:
@@ -1754,10 +2178,14 @@ class DpkgPM(PackageManager):
         base_arch_list = base_archs.split()
         multilib_variants = self.d.getVar("MULTILIB_VARIANTS", True);
         for variant in multilib_variants.split():
-            if variant == "lib32":
-                base_arch_list.append("i386")
-            elif variant == "lib64":
-                base_arch_list.append("amd64")
+            localdata = bb.data.createCopy(self.d)
+            variant_tune = localdata.getVar("DEFAULTTUNE_virtclass-multilib-" + variant, False)
+            orig_arch = localdata.getVar("DPKG_ARCH", True)
+            localdata.setVar("DEFAULTTUNE", variant_tune)
+            bb.data.update_data(localdata)
+            variant_arch = localdata.getVar("DPKG_ARCH", True)
+            if variant_arch not in base_arch_list:
+                base_arch_list.append(variant_arch)
 
         with open(self.apt_conf_file, "w+") as apt_conf:
             with open(self.d.expand("${STAGING_ETCDIR_NATIVE}/apt/apt.conf.sample")) as apt_conf_sample:
@@ -1798,11 +2226,40 @@ class DpkgPM(PackageManager):
             subprocess.check_output(cmd.split(), stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             bb.fatal("Cannot fix broken dependencies. Command '%s' "
-                     "returned %d:\n%s" % (cmd, e.returncode, e.output))
+                     "returned %d:\n%s" % (cmd, e.returncode, e.output.decode("utf-8")))
 
-    def list_installed(self, format=None):
-        return DpkgPkgsList(self.d, self.target_rootfs).list()
+    def list_installed(self):
+        return DpkgPkgsList(self.d, self.target_rootfs).list_pkgs()
 
+    """
+    Returns a dictionary with the package info.
+    """
+    def package_info(self, pkg):
+        cmd = "%s show %s" % (self.apt_cache_cmd, pkg)
+        pkg_info = super(DpkgPM, self).package_info(pkg, cmd)
+
+        pkg_arch = pkg_info[pkg]["pkgarch"]
+        pkg_filename = pkg_info[pkg]["filename"]
+        pkg_info[pkg]["filepath"] = \
+                os.path.join(self.deploy_dir, pkg_arch, pkg_filename)
+
+        return pkg_info
+
+    """
+    Returns the path to a tmpdir where resides the contents of a package.
+
+    Deleting the tmpdir is responsability of the caller.
+    """
+    def extract(self, pkg):
+        pkg_info = self.package_info(pkg)
+        if not pkg_info:
+            bb.fatal("Unable to get information for package '%s' while "
+                     "trying to extract the package."  % pkg)
+
+        tmp_dir = super(DpkgPM, self).extract(pkg, pkg_info)
+        bb.utils.remove(os.path.join(tmp_dir, "data.tar.xz"))
+
+        return tmp_dir
 
 def generate_index_files(d):
     classes = d.getVar('PACKAGE_CLASSES', True).replace("package_", "").split()

@@ -16,29 +16,26 @@
 # with this program; if not, write to the Free Software Foundation, Inc., 59
 # Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 
-import os,sys
+import os
+import sys
 import re
 import time
 
-__ALL__ = ['set_mode',
-           'get_loglevel',
+__ALL__ = ['get_loglevel',
            'set_loglevel',
            'set_logfile',
-           'raw',
            'debug',
            'verbose',
            'info',
            'warning',
            'error',
-           'ask',
-           'pause',
           ]
 
 # COLORs in ANSI
 INFO_COLOR = 32 # green
 WARN_COLOR = 33 # yellow
-ERR_COLOR  = 31 # red
-ASK_COLOR  = 34 # blue
+ERR_COLOR = 31 # red
+ASK_COLOR = 34 # blue
 NO_COLOR = 0
 
 PREFIX_RE = re.compile('^<(.*?)>\s*(.*)', re.S)
@@ -47,12 +44,12 @@ INTERACTIVE = True
 
 LOG_LEVEL = 1
 LOG_LEVELS = {
-                'quiet': 0,
-                'normal': 1,
-                'verbose': 2,
-                'debug': 3,
-                'never': 4,
-             }
+    'quiet': 0,
+    'normal': 1,
+    'verbose': 2,
+    'debug': 3,
+    'never': 4,
+}
 
 LOG_FILE_FP = None
 LOG_CONTENT = ''
@@ -69,13 +66,9 @@ def _general_print(head, color, msg=None, stream=None, level='normal'):
         # skip
         return
 
-    # encode raw 'unicode' str to utf8 encoded str
-    if msg and isinstance(msg, unicode):
-        msg = msg.encode('utf-8', 'ignore')
-
     errormsg = ''
     if CATCHERR_BUFFILE_FD > 0:
-        size = os.lseek(CATCHERR_BUFFILE_FD , 0, os.SEEK_END)
+        size = os.lseek(CATCHERR_BUFFILE_FD, 0, os.SEEK_END)
         os.lseek(CATCHERR_BUFFILE_FD, 0, os.SEEK_SET)
         errormsg = os.read(CATCHERR_BUFFILE_FD, size)
         os.ftruncate(CATCHERR_BUFFILE_FD, 0)
@@ -121,9 +114,6 @@ def _color_print(head, color, msg, stream, level):
                 newline = True
 
     if msg is not None:
-        if isinstance(msg, unicode):
-            msg = msg.encode('utf8', 'ignore')
-
         stream.write('%s%s' % (head, msg))
         if newline:
             stream.write('\n')
@@ -150,15 +140,15 @@ def _split_msg(head, msg):
         msg = msg.lstrip()
         head = '\r' + head
 
-    m = PREFIX_RE.match(msg)
-    if m:
-        head += ' <%s>' % m.group(1)
-        msg = m.group(2)
+    match = PREFIX_RE.match(msg)
+    if match:
+        head += ' <%s>' % match.group(1)
+        msg = match.group(2)
 
     return head, msg
 
 def get_loglevel():
-    return (k for k,v in LOG_LEVELS.items() if v==LOG_LEVEL).next()
+    return next((k for k, v in LOG_LEVELS.items() if v == LOG_LEVEL))
 
 def set_loglevel(level):
     global LOG_LEVEL
@@ -181,9 +171,6 @@ def log(msg=''):
     if msg:
         LOG_CONTENT += msg
 
-def raw(msg=''):
-    _general_print('', NO_COLOR, msg)
-
 def info(msg):
     head, msg = _split_msg('Info', msg)
     _general_print(head, INFO_COLOR, msg)
@@ -205,74 +192,13 @@ def error(msg):
     _color_perror(head, ERR_COLOR, msg)
     sys.exit(1)
 
-def ask(msg, default=True):
-    _general_print('\rQ', ASK_COLOR, '')
-    try:
-        if default:
-            msg += '(Y/n) '
-        else:
-            msg += '(y/N) '
-        if INTERACTIVE:
-            while True:
-                repl = raw_input(msg)
-                if repl.lower() == 'y':
-                    return True
-                elif repl.lower() == 'n':
-                    return False
-                elif not repl.strip():
-                    # <Enter>
-                    return default
-
-                # else loop
-        else:
-            if default:
-                msg += ' Y'
-            else:
-                msg += ' N'
-            _general_print('', NO_COLOR, msg)
-
-            return default
-    except KeyboardInterrupt:
-        sys.stdout.write('\n')
-        sys.exit(2)
-
-def choice(msg, choices, default=0):
-    if default >= len(choices):
-        return None
-    _general_print('\rQ', ASK_COLOR, '')
-    try:
-        msg += " [%s] " % '/'.join(choices)
-        if INTERACTIVE:
-            while True:
-                repl = raw_input(msg)
-                if repl in choices:
-                    return repl
-                elif not repl.strip():
-                    return choices[default]
-        else:
-            msg += choices[default]
-            _general_print('', NO_COLOR, msg)
-
-            return choices[default]
-    except KeyboardInterrupt:
-        sys.stdout.write('\n')
-        sys.exit(2)
-
-def pause(msg=None):
-    if INTERACTIVE:
-        _general_print('\rQ', ASK_COLOR, '')
-        if msg is None:
-            msg = 'press <ENTER> to continue ...'
-        raw_input(msg)
-
 def set_logfile(fpath):
     global LOG_FILE_FP
 
     def _savelogf():
         if LOG_FILE_FP:
-            fp = open(LOG_FILE_FP, 'w')
-            fp.write(LOG_CONTENT)
-            fp.close()
+            with open(LOG_FILE_FP, 'w') as log:
+                log.write(LOG_CONTENT)
 
     if LOG_FILE_FP is not None:
         warning('duplicate log file configuration')

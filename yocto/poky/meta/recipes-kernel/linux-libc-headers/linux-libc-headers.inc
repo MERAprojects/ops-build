@@ -18,9 +18,10 @@ LICENSE = "GPLv2"
 # But you have some kernel headers you need for some driver? That is fine
 # but get them from STAGING_KERNEL_DIR where the kernel installs itself.
 # This will make the package using them machine specific but this is much
-# better than having a machine specific C library. This does mean your 
-# recipe needs a DEPENDS += "virtual/kernel" but again, that is fine and
-# makes total sense.
+# better than having a machine specific C library. This does mean your
+# recipe needs a
+#    do_configure[depends] += "virtual/kernel:do_shared_workdir"
+# but again, that is fine and makes total sense.
 #
 # There can also be a case where your kernel extremely old and you want
 # an older libc ABI for that old kernel. The headers installed by this
@@ -35,17 +36,21 @@ python __anonymous () {
     major = d.getVar("PV",True).split('.')[0]
     if major == "3":
         d.setVar("HEADER_FETCH_VER", "3.0")
+    elif major == "4":
+        d.setVar("HEADER_FETCH_VER", "4.x")
     else:
         d.setVar("HEADER_FETCH_VER", "2.6")
 }
 
 inherit kernel-arch
 
-KORG_ARCHIVE_COMPRESSION ?= "bz2"
+KORG_ARCHIVE_COMPRESSION ?= "xz"
 
 SRC_URI = "${KERNELORG_MIRROR}/linux/kernel/v${HEADER_FETCH_VER}/linux-${PV}.tar.${KORG_ARCHIVE_COMPRESSION}"
 
 S = "${WORKDIR}/linux-${PV}"
+
+EXTRA_OEMAKE = " HOSTCC="${BUILD_CC}" HOSTCPP="${BUILD_CPP}""
 
 do_configure() {
 	oe_runmake allnoconfig

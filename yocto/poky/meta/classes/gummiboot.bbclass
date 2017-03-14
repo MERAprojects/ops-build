@@ -4,7 +4,7 @@
 
 # gummiboot.bbclass - equivalent of grub-efi.bbclass
 # Set EFI_PROVIDER = "gummiboot" to use gummiboot on your live images instead of grub-efi
-# (images built by bootimage.bbclass or boot-directdisk.bbclass)
+# (images built by image-live.bbclass or image-vm.bbclass)
 
 do_bootimg[depends] += "${MLPREFIX}gummiboot:do_deploy"
 do_bootdirectdisk[depends] += "${MLPREFIX}gummiboot:do_deploy"
@@ -14,6 +14,9 @@ EFIDIR = "/EFI/BOOT"
 GUMMIBOOT_CFG ?= "${S}/loader.conf"
 GUMMIBOOT_ENTRIES ?= ""
 GUMMIBOOT_TIMEOUT ?= "10"
+
+# Need UUID utility code.
+inherit fs-uuid
 
 efi_populate() {
         DEST=$1
@@ -31,6 +34,8 @@ efi_populate() {
         install -d ${DEST}/loader
         install -d ${DEST}/loader/entries
         install -m 0644 ${DEPLOY_DIR_IMAGE}/${EFI_IMAGE} ${DEST}${EFIDIR}/${DEST_EFI_IMAGE}
+        EFIPATH=$(echo "${EFIDIR}" | sed 's/\//\\/g')
+        printf 'fs0:%s\%s\n' "$EFIPATH" "$DEST_EFI_IMAGE" >${DEST}/startup.nsh
         install -m 0644 ${GUMMIBOOT_CFG} ${DEST}/loader/loader.conf
         for i in ${GUMMIBOOT_ENTRIES}; do
             install -m 0644 ${i} ${DEST}/loader/entries
@@ -43,7 +48,8 @@ efi_iso_populate() {
         mkdir -p ${EFIIMGDIR}/${EFIDIR}
         cp $iso_dir/${EFIDIR}/* ${EFIIMGDIR}${EFIDIR}
         cp $iso_dir/vmlinuz ${EFIIMGDIR}
-        echo "${DEST_EFI_IMAGE}" > ${EFIIMGDIR}/startup.nsh
+        EFIPATH=$(echo "${EFIDIR}" | sed 's/\//\\/g')
+        echo "fs0:${EFIPATH}\\${DEST_EFI_IMAGE}" > ${EFIIMGDIR}/startup.nsh
         if [ -f "$iso_dir/initrd" ] ; then
             cp $iso_dir/initrd ${EFIIMGDIR}
         fi
@@ -68,7 +74,7 @@ python build_efi_cfg() {
     try:
          cfgfile = open(cfile, 'w')
     except OSError:
-        raise bb.build.funcFailed('Unable to open %s' % (cfile))
+        bb.fatal('Unable to open %s' % cfile)
 
     cfgfile.write('# Automatically created by OE\n')
     cfgfile.write('default %s\n' % (labels.split()[0]))
@@ -84,14 +90,14 @@ python build_efi_cfg() {
 
         overrides = localdata.getVar('OVERRIDES', True)
         if not overrides:
-            raise bb.build.FuncFailed('OVERRIDES not defined')
+            bb.fatal('OVERRIDES not defined')
 
         entryfile = "%s/%s.conf" % (s, label)
         d.appendVar("GUMMIBOOT_ENTRIES", " " + entryfile)
         try:
             entrycfg = open(entryfile, "w")
         except OSError:
-            raise bb.build.funcFailed('Unable to open %s' % (entryfile))
+            bb.fatal('Unable to open %s' % entryfile)
         localdata.setVar('OVERRIDES', label + ':' + overrides)
         bb.data.update_data(localdata)
 
@@ -108,6 +114,7 @@ python build_efi_cfg() {
             lb = "install-efi"
         entrycfg.write('options LABEL=%s ' % lb)
         if append:
+            append = replace_rootfs_uuid(d, append)
             entrycfg.write('%s' % append)
         entrycfg.write('\n')
         entrycfg.close()

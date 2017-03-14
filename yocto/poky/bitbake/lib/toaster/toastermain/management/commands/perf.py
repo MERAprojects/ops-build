@@ -2,7 +2,12 @@ from django.core.management.base import BaseCommand
 from django.test.client import Client
 import os, sys, re
 import requests
-import toastermain.settings as settings
+from django.conf import settings
+
+# pylint: disable=E1103
+# Instance of 'WSGIRequest' has no 'status_code' member
+# (but some types could not be inferred) (maybe-no-member)
+
 
 class Command(BaseCommand):
     help    = "Test the response time for all toaster urls"
@@ -20,7 +25,7 @@ class Command(BaseCommand):
 			info = self.url_info(full_url)
 			status_code = info[0]
 			load_time = info[1]
-			print 'Trying \'' + full_url + '\', ' + str(status_code) + ', ' + str(load_time)
+			print('Trying \'' + full_url + '\', ' + str(status_code) + ', ' + str(load_time))
 
     def get_full_url(self, url_patt, url_root_res):
 	full_url = str(url_patt).split('^')[1].replace('$>', '').replace('(?P<file_path>(?:/[', '/bin/busybox').replace('.*', '')
@@ -49,5 +54,5 @@ class Command(BaseCommand):
 
     def error(self, *args):
 	for arg in args:
-	    print >>sys.stderr, arg,
-	print >>sys.stderr
+	    print(arg, end=' ', file=sys.stderr)
+	print(file=sys.stderr)

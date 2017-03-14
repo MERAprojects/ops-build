@@ -9,7 +9,7 @@ Usage in the recipe:
 
     SRC_URI = "ccrc://cc.example.org/ccrc;vob=/example_vob;module=/example_module"
     SRCREV = "EXAMPLE_CLEARCASE_TAG"
-    PV = "${@d.getVar("SRCREV").replace("/", "+")}"
+    PV = "${@d.getVar("SRCREV", False).replace("/", "+")}"
 
 The fetcher uses the rcleartool or cleartool remote client, depending on which one is available.
 
@@ -113,7 +113,7 @@ class ClearCase(FetchMethod):
         if data.getVar("SRCREV", d, True) == "INVALID":
           raise FetchError("Set a valid SRCREV for the clearcase fetcher in your recipe, e.g. SRCREV = \"/main/LATEST\" or any other label of your choice.")
 
-        ud.label = d.getVar("SRCREV")
+        ud.label = d.getVar("SRCREV", False)
         ud.customspec = d.getVar("CCASE_CUSTOM_CONFIG_SPEC", True)
 
         ud.server     = "%s://%s%s" % (ud.proto, ud.host, ud.path)
@@ -202,11 +202,10 @@ class ClearCase(FetchMethod):
 
     def _remove_view(self, ud, d):
         if os.path.exists(ud.viewdir):
-            os.chdir(ud.ccasedir)
             cmd = self._build_ccase_command(ud, 'rmview');
             logger.info("cleaning up [VOB=%s label=%s view=%s]", ud.vob, ud.label, ud.viewname)
             bb.fetch2.check_network_access(d, cmd, ud.url)
-            output = runfetchcmd(cmd, d)
+            output = runfetchcmd(cmd, d, workdir=ud.ccasedir)
             logger.info("rmview output: %s", output)
 
     def need_update(self, ud, d):
@@ -241,11 +240,10 @@ class ClearCase(FetchMethod):
                 raise e
 
         # Set configspec: Setting the configspec effectively fetches the files as defined in the configspec
-        os.chdir(ud.viewdir)
         cmd = self._build_ccase_command(ud, 'setcs');
         logger.info("fetching data [VOB=%s label=%s view=%s]", ud.vob, ud.label, ud.viewname)
         bb.fetch2.check_network_access(d, cmd, ud.url)
-        output = runfetchcmd(cmd, d)
+        output = runfetchcmd(cmd, d, workdir=ud.viewdir)
         logger.info("%s", output)
 
         # Copy the configspec to the viewdir so we have it in our source tarball later

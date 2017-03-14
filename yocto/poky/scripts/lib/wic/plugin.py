@@ -29,7 +29,7 @@ PLUGIN_TYPES = ["imager", "source"]
 PLUGIN_DIR = "/lib/wic/plugins" # relative to scripts
 SCRIPTS_PLUGIN_DIR = "scripts" + PLUGIN_DIR
 
-class PluginMgr(object):
+class PluginMgr():
     plugin_dirs = {}
 
     # make the manager class as singleton
@@ -42,13 +42,13 @@ class PluginMgr(object):
 
     def __init__(self):
         wic_path = os.path.dirname(__file__)
-        eos = wic_path.find('scripts') + len('scripts')
+        eos = wic_path.rfind('scripts') + len('scripts')
         scripts_path = wic_path[:eos]
         self.scripts_path = scripts_path
         self.plugin_dir = scripts_path + PLUGIN_DIR
         self.layers_path = None
 
-    def _build_plugin_dir_list(self, dl, ptype):
+    def _build_plugin_dir_list(self, plugin_dir, ptype):
         if self.layers_path is None:
             self.layers_path = get_bitbake_var("BBLAYERS")
         layer_dirs = []
@@ -58,7 +58,7 @@ class PluginMgr(object):
                 path = os.path.join(layer_path, SCRIPTS_PLUGIN_DIR, ptype)
                 layer_dirs.append(path)
 
-        path = os.path.join(dl, ptype)
+        path = os.path.join(plugin_dir, ptype)
         layer_dirs.append(path)
 
         return layer_dirs
@@ -74,8 +74,6 @@ class PluginMgr(object):
         path = os.path.abspath(os.path.expanduser(path))
 
         if not os.path.isdir(path):
-            msger.debug("Plugin dir is not a directory or does not exist: %s"\
-                          % path)
             return
 
         if path not in self.plugin_dirs:
@@ -83,8 +81,9 @@ class PluginMgr(object):
             # the value True/False means "loaded"
 
     def _load_all(self):
-        for (pdir, loaded) in self.plugin_dirs.iteritems():
-            if loaded: continue
+        for (pdir, loaded) in self.plugin_dirs.items():
+            if loaded:
+                continue
 
             sys.path.insert(0, pdir)
             for mod in [x[:-3] for x in os.listdir(pdir) if x.endswith(".py")]:
@@ -98,12 +97,12 @@ class PluginMgr(object):
                             self.plugin_dirs[pdir] = True
                             msger.debug("Plugin module %s:%s imported"\
                                         % (mod, pymod.__file__))
-                        except ImportError, err:
+                        except ImportError as err:
                             msg = 'Failed to load plugin %s/%s: %s' \
                                 % (os.path.basename(pdir), mod, err)
                             msger.warning(msg)
 
-            del(sys.path[0])
+            del sys.path[0]
 
     def get_plugins(self, ptype):
         """ the return value is dict of name:class pairs """
@@ -125,12 +124,7 @@ class PluginMgr(object):
 
         self.append_dirs(plugins_dir)
 
-        plugins = []
-
-        for _source_name, klass in self.get_plugins('source').iteritems():
-            plugins.append(_source_name)
-
-        return plugins
+        return self.get_plugins('source')
 
 
     def get_source_plugin_methods(self, source_name, methods):
@@ -141,9 +135,9 @@ class PluginMgr(object):
         None is returned.
         """
         return_methods = None
-        for _source_name, klass in self.get_plugins('source').iteritems():
+        for _source_name, klass in self.get_plugins('source').items():
             if _source_name == source_name:
-                for _method_name in methods.keys():
+                for _method_name in methods:
                     if not hasattr(klass, _method_name):
                         msger.warning("Unimplemented %s source interface for: %s"\
                                       % (_method_name, _source_name))

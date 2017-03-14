@@ -15,8 +15,10 @@ IMAGE_ROOTFS_ALIGNMENT = "64"
 
 # Do a quiet boot with limited console messages
 APPEND += "quiet rootfstype=ext4"
-SYSLINUX_PROMPT ?= "0"
-SYSLINUX_TIMEOUT ?= "0"
+AUTO_SYSLINUXMENU = "0"
+SYSLINUX_PROMPT = "0"
+SYSLINUX_TIMEOUT = "0"
+ROOT_VM = "root=PARTUUID=${DISK_SIGNATURE}-02 rootfstype=ext4 "
 
 DEPENDS = "tar-native qemu-native"
 IMAGE_FSTYPES = "vmdk tar.gz"
@@ -79,6 +81,6 @@ python do_bundle_files() {
     bb.build.exec_func('create_bundle_files', d)
 }
 
-addtask bundle_files after do_vmdkimg before do_build
+addtask bundle_files after do_vmimg before do_build
 
 inherit openswitch-image

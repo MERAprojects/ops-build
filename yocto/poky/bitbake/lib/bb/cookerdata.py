@@ -22,9 +22,11 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
-import os, sys
-from functools import wraps
 import logging
+import os
+import re
+import sys
+from functools import wraps
 import bb
 from bb import data
 import bb.parse
@@ -63,9 +65,9 @@ class ConfigParameters(object):
             raise Exception("Unable to set configuration option 'cmd' on the server: %s" % error)
 
         if not self.options.pkgs_to_build:
-            bbpkgs, error = server.runCommand(["getVariable", "BBPKGS"])
+            bbpkgs, error = server.runCommand(["getVariable", "BBTARGETS"])
             if error:
-                raise Exception("Unable to get the value of BBPKGS from the server: %s" % error)
+                raise Exception("Unable to get the value of BBTARGETS from the server: %s" % error)
             if bbpkgs:
                 self.options.pkgs_to_build.extend(bbpkgs.split())
 
@@ -73,7 +75,8 @@ class ConfigParameters(object):
         options = {}
         for o in ["abort", "tryaltconfigs", "force", "invalidate_stamp", 
                   "verbose", "debug", "dry_run", "dump_signatures", 
-                  "debug_domains", "extra_assume_provided", "profile"]:
+                  "debug_domains", "extra_assume_provided", "profile",
+                  "prefile", "postfile"]:
             options[o] = getattr(self.options, o)
 
         ret, error = server.runCommand(["updateConfig", options, environment])
@@ -128,12 +131,15 @@ class CookerConfiguration(object):
         self.extra_assume_provided = []
         self.prefile = []
         self.postfile = []
+        self.prefile_server = []
+        self.postfile_server = []
         self.debug = 0
         self.cmd = None
         self.abort = True
         self.force = False
         self.profile = False
         self.nosetscene = False
+        self.setsceneonly = False
         self.invalidate_stamp = False
         self.dump_signatures = []
         self.dry_run = False
@@ -173,10 +179,25 @@ def catch_parse_error(func):
     def wrapped(fn, *args):
         try:
             return func(fn, *args)
-        except (IOError, bb.parse.ParseError, bb.data_smart.ExpansionError) as exc:
+        except IOError as exc:
             import traceback
-            parselog.critical( traceback.format_exc())
+            parselog.critical(traceback.format_exc())
             parselog.critical("Unable to parse %s: %s" % (fn, exc))
+            sys.exit(1)
+        except bb.data_smart.ExpansionError as exc:
+            import traceback
+
+            bbdir = os.path.dirname(__file__) + os.sep
+            exc_class, exc, tb = sys.exc_info()
+            for tb in iter(lambda: tb.tb_next, None):
+                # Skip frames in bitbake itself, we only want the metadata
+                fn, _, _, _ = traceback.extract_tb(tb, 1)[0]
+                if not fn.startswith(bbdir):
+                    break
+            parselog.critical("Unable to parse %s" % fn, exc_info=(exc_class, exc, tb))
+            sys.exit(1)
+        except bb.parse.ParseError as exc:
+            parselog.critical(str(exc))
             sys.exit(1)
     return wrapped
 
@@ -216,9 +237,9 @@ class CookerDataBuilder(object):
 
         bb.utils.set_context(bb.utils.clean_context())
         bb.event.set_class_handlers(bb.event.clean_class_handlers())
-        self.data = bb.data.init()
+        self.basedata = bb.data.init()
         if self.tracking:
-            self.data.enableTracking()
+            self.basedata.enableTracking()
 
         # Keep a datastore of the initial environment variables and their
         # values from when BitBake was launched to enable child processes
@@ -229,16 +250,49 @@ class CookerDataBuilder(object):
             self.savedenv.setVar(k, cookercfg.env[k])
 
         filtered_keys = bb.utils.approved_variables()
-        bb.data.inheritFromOS(self.data, self.savedenv, filtered_keys)
-        self.data.setVar("BB_ORIGENV", self.savedenv)
+        bb.data.inheritFromOS(self.basedata, self.savedenv, filtered_keys)
+        self.basedata.setVar("BB_ORIGENV", self.savedenv)
         
         if worker:
-            self.data.setVar("BB_WORKERCONTEXT", "1")
+            self.basedata.setVar("BB_WORKERCONTEXT", "1")
+
+        self.data = self.basedata
+        self.mcdata = {}
 
     def parseBaseConfiguration(self):
         try:
-            self.parseConfigurationFiles(self.prefiles, self.postfiles)
-        except SyntaxError:
+            bb.parse.init_parser(self.basedata)
+            self.data = self.parseConfigurationFiles(self.prefiles, self.postfiles)
+
+            if self.data.getVar("BB_WORKERCONTEXT", False) is None:
+                bb.fetch.fetcher_init(self.data)
+            bb.codeparser.parser_cache_init(self.data)
+
+            bb.event.fire(bb.event.ConfigParsed(), self.data)
+
+            reparse_cnt = 0
+            while self.data.getVar("BB_INVALIDCONF", False) is True:
+                if reparse_cnt > 20:
+                    logger.error("Configuration has been re-parsed over 20 times, "
+                                 "breaking out of the loop...")
+                    raise Exception("Too deep config re-parse loop. Check locations where "
+                                    "BB_INVALIDCONF is being set (ConfigParsed event handlers)")
+                self.data.setVar("BB_INVALIDCONF", False)
+                self.data = self.parseConfigurationFiles(self.prefiles, self.postfiles)
+                reparse_cnt += 1
+                bb.event.fire(bb.event.ConfigParsed(), self.data)
+
+            bb.parse.init_parser(self.data)
+            self.data_hash = self.data.get_hash()
+            self.mcdata[''] = self.data
+
+            multiconfig = (self.data.getVar("BBMULTICONFIG", True) or "").split()
+            for config in multiconfig:
+                mcdata = self.parseConfigurationFiles(self.prefiles, self.postfiles, config)
+                bb.event.fire(bb.event.ConfigParsed(), mcdata)
+                self.mcdata[config] = mcdata
+
+        except (SyntaxError, bb.BBHandledException):
             raise bb.BBHandledException
         except bb.data_smart.ExpansionError as e:
             logger.error(str(e))
@@ -250,9 +304,9 @@ class CookerDataBuilder(object):
     def _findLayerConf(self, data):
         return findConfigFile("bblayers.conf", data)
 
-    def parseConfigurationFiles(self, prefiles, postfiles):
-        data = self.data
-        bb.parse.init_parser(data)
+    def parseConfigurationFiles(self, prefiles, postfiles, mc = "default"):
+        data = bb.data.createCopy(self.basedata)
+        data.setVar("BB_CURRENT_MC", mc)
 
         # Parse files for loading *before* bitbake.conf and any includes
         for f in prefiles:
@@ -271,13 +325,22 @@ class CookerDataBuilder(object):
             data = bb.data.createCopy(data)
             approved = bb.utils.approved_variables()
             for layer in layers:
+                if not os.path.isdir(layer):
+                    parselog.critical("Layer directory '%s' does not exist! "
+                                      "Please check BBLAYERS in %s" % (layer, layerconf))
+                    sys.exit(1)
                 parselog.debug(2, "Adding layer %s", layer)
                 if 'HOME' in approved and '~' in layer:
                     layer = os.path.expanduser(layer)
+                if layer.endswith('/'):
+                    layer = layer.rstrip('/')
                 data.setVar('LAYERDIR', layer)
+                data.setVar('LAYERDIR_RE', re.escape(layer))
                 data = parse_config_file(os.path.join(layer, "conf", "layer.conf"), data)
                 data.expandVarref('LAYERDIR')
+                data.expandVarref('LAYERDIR_RE')
 
+            data.delVar('LAYERDIR_RE')
             data.delVar('LAYERDIR')
 
         if not data.getVar("BBPATH", True):
@@ -301,23 +364,15 @@ class CookerDataBuilder(object):
 
         # Nomally we only register event handlers at the end of parsing .bb files
         # We register any handlers we've found so far here...
-        for var in data.getVar('__BBHANDLERS') or []:
-            bb.event.register(var, data.getVar(var),  (data.getVarFlag(var, "eventmask", True) or "").split())
+        for var in data.getVar('__BBHANDLERS', False) or []:
+            handlerfn = data.getVarFlag(var, "filename", False)
+            if not handlerfn:
+                parselog.critical("Undefined event handler function '%s'" % var)
+                sys.exit(1)
+            handlerln = int(data.getVarFlag(var, "lineno", False))
+            bb.event.register(var, data.getVar(var, False),  (data.getVarFlag(var, "eventmask", True) or "").split(), handlerfn, handlerln)
 
-        if data.getVar("BB_WORKERCONTEXT", False) is None:
-            bb.fetch.fetcher_init(data)
-        bb.codeparser.parser_cache_init(data)
-        bb.event.fire(bb.event.ConfigParsed(), data)
-
-        if data.getVar("BB_INVALIDCONF") is True:
-            data.setVar("BB_INVALIDCONF", False)
-            self.parseConfigurationFiles(self.prefiles, self.postfiles)
-            return
-
-        bb.parse.init_parser(data)
         data.setVar('BBINCLUDED',bb.parse.get_file_depends(data))
-        self.data = data
-        self.data_hash = data.get_hash()
 
-
+        return data
 

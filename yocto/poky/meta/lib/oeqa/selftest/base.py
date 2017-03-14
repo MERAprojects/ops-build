@@ -4,7 +4,7 @@
 
 
 # DESCRIPTION
-# Base class inherited by test classes in meta/lib/selftest
+# Base class inherited by test classes in meta/lib/oeqa/selftest
 
 import unittest
 import os
@@ -16,6 +16,8 @@ import errno
 import oeqa.utils.ftools as ftools
 from oeqa.utils.commands import runCmd, bitbake, get_bb_var, get_test_layer
 from oeqa.utils.decorators import LogResults
+from random import choice
+import glob
 
 @LogResults
 class oeSelfTest(unittest.TestCase):
@@ -26,14 +28,47 @@ class oeSelfTest(unittest.TestCase):
     def __init__(self, methodName="runTest"):
         self.builddir = os.environ.get("BUILDDIR")
         self.localconf_path = os.path.join(self.builddir, "conf/local.conf")
+        self.localconf_backup = os.path.join(self.builddir, "conf/local.bk")
         self.testinc_path = os.path.join(self.builddir, "conf/selftest.inc")
+        self.local_bblayers_path = os.path.join(self.builddir, "conf/bblayers.conf")
+        self.local_bblayers_backup = os.path.join(self.builddir,
+                                                  "conf/bblayers.bk")
+        self.testinc_bblayers_path = os.path.join(self.builddir, "conf/bblayers.inc")
+        self.machineinc_path = os.path.join(self.builddir, "conf/machine.inc")
         self.testlayer_path = oeSelfTest.testlayer_path
         self._extra_tear_down_commands = []
-        self._track_for_cleanup = []
+        self._track_for_cleanup = [
+            self.testinc_path, self.testinc_bblayers_path,
+            self.machineinc_path, self.localconf_backup,
+            self.local_bblayers_backup]
         super(oeSelfTest, self).__init__(methodName)
 
     def setUp(self):
         os.chdir(self.builddir)
+        # Check if local.conf or bblayers.conf files backup exists
+        # from a previous failed test and restore them
+        if os.path.isfile(self.localconf_backup) or os.path.isfile(
+                self.local_bblayers_backup):
+            self.log.debug("Found a local.conf and/or bblayers.conf backup \
+from a previously aborted test. Restoring these files now, but tests should \
+be re-executed from a clean environment to ensure accurate results.")
+            try:
+                shutil.copyfile(self.localconf_backup, self.localconf_path)
+            except OSError as e:
+                if e.errno != errno.ENOENT:
+                    raise
+            try:
+                shutil.copyfile(self.local_bblayers_backup,
+                                self.local_bblayers_path)
+            except OSError as e:
+                if e.errno != errno.ENOENT:
+                    raise
+        else:
+            # backup local.conf and bblayers.conf
+            shutil.copyfile(self.localconf_path, self.localconf_backup)
+            shutil.copyfile(self.local_bblayers_path,
+                            self.local_bblayers_backup)
+            self.log.debug("Creating local.conf and bblayers.conf backups.")
         # we don't know what the previous test left around in config or inc files
         # if it failed so we need a fresh start
         try:
@@ -45,6 +80,25 @@ class oeSelfTest(unittest.TestCase):
             for f in files:
                 if f == 'test_recipe.inc':
                     os.remove(os.path.join(root, f))
+
+        for incl_file in [self.testinc_bblayers_path, self.machineinc_path]:
+            try:
+                os.remove(incl_file)
+            except OSError as e:
+                if e.errno != errno.ENOENT:
+                    raise
+
+        # Get CUSTOMMACHINE from env (set by --machine argument to oe-selftest)
+        custommachine = os.getenv('CUSTOMMACHINE')
+        if custommachine:
+            if custommachine == 'random':
+                machine = get_random_machine()
+            else:
+                machine = custommachine
+            machine_conf = 'MACHINE ??= "%s"\n' % machine
+            self.set_machine_config(machine_conf)
+            print('MACHINE: %s' % machine)
+
         # tests might need their own setup
         # but if they overwrite this one they have to call
         # super each time, so let's give them an alternative
@@ -92,10 +146,20 @@ class oeSelfTest(unittest.TestCase):
         self.log.debug("Writing to: %s\n%s\n" % (self.testinc_path, data))
         ftools.write_file(self.testinc_path, data)
 
+        custommachine = os.getenv('CUSTOMMACHINE')
+        if custommachine and 'MACHINE' in data:
+            machine = get_bb_var('MACHINE')
+            self.log.warning('MACHINE overridden: %s' % machine)
+
     # append to <builddir>/conf/selftest.inc
     def append_config(self, data):
         self.log.debug("Appending to: %s\n%s\n" % (self.testinc_path, data))
         ftools.append_file(self.testinc_path, data)
+
+        custommachine = os.getenv('CUSTOMMACHINE')
+        if custommachine and 'MACHINE' in data:
+            machine = get_bb_var('MACHINE')
+            self.log.warning('MACHINE overridden: %s' % machine)
 
     # remove data from <builddir>/conf/selftest.inc
     def remove_config(self, data):
@@ -129,3 +193,43 @@ class oeSelfTest(unittest.TestCase):
         except OSError as e:
             if e.errno != errno.ENOENT:
                 raise
+
+    # write to <builddir>/conf/bblayers.inc
+    def write_bblayers_config(self, data):
+        self.log.debug("Writing to: %s\n%s\n" % (self.testinc_bblayers_path, data))
+        ftools.write_file(self.testinc_bblayers_path, data)
+
+    # append to <builddir>/conf/bblayers.inc
+    def append_bblayers_config(self, data):
+        self.log.debug("Appending to: %s\n%s\n" % (self.testinc_bblayers_path, data))
+        ftools.append_file(self.testinc_bblayers_path, data)
+
+    # remove data from <builddir>/conf/bblayers.inc
+    def remove_bblayers_config(self, data):
+        self.log.debug("Removing from: %s\n\%s\n" % (self.testinc_bblayers_path, data))
+        ftools.remove_from_file(self.testinc_bblayers_path, data)
+
+    # write to <builddir>/conf/machine.inc
+    def set_machine_config(self, data):
+        self.log.debug("Writing to: %s\n%s\n" % (self.machineinc_path, data))
+        ftools.write_file(self.machineinc_path, data)
+
+
+def get_available_machines():
+    # Get a list of all available machines
+    bbpath = get_bb_var('BBPATH').split(':')
+    machines = []
+
+    for path in bbpath:
+        found_machines = glob.glob(os.path.join(path, 'conf', 'machine', '*.conf'))
+        if found_machines:
+            for i in found_machines:
+                # eg: '/home/<user>/poky/meta-intel/conf/machine/intel-core2-32.conf'
+                machines.append(os.path.splitext(os.path.basename(i))[0])
+
+    return machines
+
+
+def get_random_machine():
+    # Get a random machine
+    return choice(get_available_machines())

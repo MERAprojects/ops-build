@@ -10,7 +10,7 @@ HOMEPAGE = "http://mesa3d.org"
 BUGTRACKER = "https://bugs.freedesktop.org"
 SECTION = "x11"
 LICENSE = "MIT"
-LIC_FILES_CHKSUM = "file://docs/license.html;md5=6a23445982a7a972ac198e93cc1cb3de"
+LIC_FILES_CHKSUM = "file://docs/license.html;md5=899fbe7e42d494c7c8c159c7001693d5"
 
 PE = "2"
 
@@ -24,23 +24,23 @@ REQUIRED_DISTRO_FEATURES = "opengl"
 
 EXTRA_OECONF = "--enable-shared-glapi"
 
-PACKAGECONFIG ??= "egl gles dri \
+PACKAGECONFIG ??= "gbm egl gles dri ${MESA_CRYPTO} \
 		${@bb.utils.contains('DISTRO_FEATURES', 'x11', 'x11', '', d)}\
 		${@bb.utils.contains('DISTRO_FEATURES', 'wayland', 'wayland', '', d)}\
 		"
 
+PACKAGECONFIG[gbm] = "--enable-gbm,--disable-gbm"
+
 X11_DEPS = "xf86driproto glproto virtual/libx11 libxext libxxf86vm libxdamage libxfixes"
 PACKAGECONFIG[x11] = "--enable-glx-tls,--disable-glx,${X11_DEPS}"
 PACKAGECONFIG[xvmc] = "--enable-xvmc,--disable-xvmc,libxvmc"
-PACKAGECONFIG[wayland] = ",,wayland"
+PACKAGECONFIG[wayland] = ",,wayland-native wayland"
 
 DRIDRIVERS = "swrast"
 DRIDRIVERS_append_x86 = ",radeon,r200,nouveau,i965,i915"
 DRIDRIVERS_append_x86-64 = ",radeon,r200,nouveau,i965,i915"
 PACKAGECONFIG[dri] = "--enable-dri --with-dri-drivers=${DRIDRIVERS}, --disable-dri, dri2proto libdrm"
 PACKAGECONFIG[dri3] = "--enable-dri3, --disable-dri3, dri3proto presentproto libxshmfence"
-
-EXTRA_OECONF += "--enable-gbm"
 
 PACKAGECONFIG[gles] = "--enable-gles1 --enable-gles2, --disable-gles1 --disable-gles2"
 
@@ -49,10 +49,9 @@ EGL_PLATFORMS .="${@bb.utils.contains('PACKAGECONFIG', 'x11', ',x11', '', d)}"
 EGL_PLATFORMS .="${@bb.utils.contains('PACKAGECONFIG', 'wayland', ',wayland', '', d)}"
 PACKAGECONFIG[egl] = "--enable-egl --with-egl-platforms=${EGL_PLATFORMS}, --disable-egl"
 
-PACKAGECONFIG[openvg] = "--enable-openvg, --disable-openvg"
-
 GALLIUMDRIVERS = "swrast"
 GALLIUMDRIVERS_LLVM33 = "${@bb.utils.contains('PACKAGECONFIG', 'r600', 'radeonsi,r600', '', d)}"
+PACKAGECONFIG[r600] = ""
 GALLIUMDRIVERS_LLVM33_ENABLED = "${@base_version_less_or_equal('MESA_LLVM_RELEASE', '3.2', False, len('${GALLIUMDRIVERS_LLVM33}') > 0, d)}"
 GALLIUMDRIVERS_LLVM = "r300,svga,nouveau${@',${GALLIUMDRIVERS_LLVM33}' if ${GALLIUMDRIVERS_LLVM33_ENABLED} else ''}"
 GALLIUMDRIVERS_append_x86 = "${@bb.utils.contains('PACKAGECONFIG', 'gallium-llvm', ',${GALLIUMDRIVERS_LLVM}', '', d)}"
@@ -65,6 +64,12 @@ PACKAGECONFIG[gallium-llvm] = "--enable-gallium-llvm --enable-llvm-shared-libs, 
 export WANT_LLVM_RELEASE = "${MESA_LLVM_RELEASE}"
 PACKAGECONFIG[xa]  = "--enable-xa, --disable-xa"
 
+# Mesa requires one of the following crypto implementation, pick one of them
+MESA_CRYPTO ??= "openssl"
+PACKAGECONFIG[openssl] = "--with-sha1=libcrypto,,openssl"
+PACKAGECONFIG[nettle] = "--with-sha1=libnettle,,nettle"
+PACKAGECONFIG[gcrypt] = "--with-sha1=libgcrypt,,libgcrypt"
+
 # llvmpipe is slow if compiled with -fomit-frame-pointer (e.g. -O2)
 FULL_OPTIMIZATION_append = " -fno-omit-frame-pointer"
 
@@ -73,6 +78,9 @@ EXCLUDE_FROM_WORLD = "1"
 
 # Remove the mesa dependency on mesa-dev, as mesa is empty
 RDEPENDS_${PN}-dev = ""
+
+# Add dependency so that GLES3 header don't need to be added manually
+RDEPENDS_libgles2-mesa-dev += "libgles3-mesa-dev"
 
 PACKAGES =+ "libegl-mesa libegl-mesa-dev \
              libosmesa libosmesa-dev \
@@ -83,7 +91,6 @@ PACKAGES =+ "libegl-mesa libegl-mesa-dev \
              libgles2-mesa libgles2-mesa-dev \
              libgles3-mesa libgles3-mesa-dev \
              libwayland-egl libwayland-egl-dev \
-             libopenvg libopenvg-dev \
              libxvmcsoftpipe libxvmcsoftpipe-dev \
              libxatracker libxatracker-dev \
              mesa-megadriver \
@@ -118,7 +125,9 @@ python __anonymous() {
         d.appendVar("RREPLACES_" + fullp, pkgs)
         d.appendVar("RPROVIDES_" + fullp, pkgs)
         d.appendVar("RCONFLICTS_" + fullp, pkgs)
-        
+
+        d.appendVar("RRECOMMENDS_" + fullp, " mesa-megadriver")
+
         # For -dev, the first element is both the Debian and original name
         fullp += "-dev"
         pkgs = p[1] + "-dev"
@@ -136,16 +145,17 @@ python mesa_populate_packages() {
         d.setVar("RREPLACES_%s" % pkg, pkg.replace("mesa", "mesa-dri", 1))
 
     import re
-    dri_drivers_root = os.path.join(d.getVar('libdir', True), "dri")
-    dri_pkgs = os.listdir(d.getVar('PKGD', True) + dri_drivers_root)
-    lib_name = d.expand("${MLPREFIX}mesa-megadriver")
-    for p in dri_pkgs:
-        m = re.match('^(.*)_dri\.so$', p)
-        if m:
-            pkg_name = " ${MLPREFIX}mesa-driver-%s" % legitimize_package_name(m.group(1))
-            d.appendVar("RPROVIDES_%s" % lib_name, pkg_name)
-            d.appendVar("RCONFLICTS_%s" % lib_name, pkg_name)
-            d.appendVar("RREPLACES_%s" % lib_name, pkg_name)
+    dri_drivers_root = oe.path.join(d.getVar('PKGD', True), d.getVar('libdir', True), "dri")
+    if os.path.isdir(dri_drivers_root):
+        dri_pkgs = os.listdir(dri_drivers_root)
+        lib_name = d.expand("${MLPREFIX}mesa-megadriver")
+        for p in dri_pkgs:
+            m = re.match('^(.*)_dri\.so$', p)
+            if m:
+                pkg_name = " ${MLPREFIX}mesa-driver-%s" % legitimize_package_name(m.group(1))
+                d.appendVar("RPROVIDES_%s" % lib_name, pkg_name)
+                d.appendVar("RCONFLICTS_%s" % lib_name, pkg_name)
+                d.appendVar("RREPLACES_%s" % lib_name, pkg_name)
 
     pipe_drivers_root = os.path.join(d.getVar('libdir', True), "gallium-pipe")
     do_split_packages(d, pipe_drivers_root, '^pipe_(.*)\.so$', 'mesa-driver-pipe-%s', 'Mesa %s pipe driver', extra_depends='')
@@ -155,7 +165,6 @@ PACKAGESPLITFUNCS_prepend = "mesa_populate_packages "
 
 PACKAGES_DYNAMIC += "^mesa-driver-.*"
 
-FILES_${PN}-dbg += "${libdir}/dri/.debug/*"
 FILES_${PN} += "${sysconfdir}/drirc"
 FILES_mesa-megadriver = "${libdir}/dri/*"
 FILES_libegl-mesa = "${libdir}/libEGL.so.*"
@@ -166,7 +175,6 @@ FILES_libgl-mesa = "${libdir}/libGL.so.*"
 FILES_libglapi = "${libdir}/libglapi.so.*"
 FILES_libosmesa = "${libdir}/libOSMesa.so.*"
 FILES_libwayland-egl = "${libdir}/libwayland-egl.so.*"
-FILES_libopenvg = "${libdir}/libOpenVG.so.*"
 FILES_libxvmcsoftpipe = "${libdir}/libXvMCsoftpipe.so.*"
 FILES_libxatracker = "${libdir}/libxatracker.so.*"
 
@@ -180,11 +188,7 @@ FILES_libgles2-mesa-dev = "${libdir}/libGLESv2.* ${includedir}/GLES2 ${libdir}/p
 FILES_libgles3-mesa-dev = "${includedir}/GLES3"
 FILES_libosmesa-dev = "${libdir}/libOSMesa.* ${includedir}/osmesa.h ${libdir}/pkgconfig/osmesa.pc"
 FILES_libwayland-egl-dev = "${libdir}/pkgconfig/wayland-egl.pc ${libdir}/libwayland-egl.*"
-FILES_libopenvg-dev = "${libdir}/libOpenVG.so ${libdir}/libOpenVG.la* \
-                       ${includedir}/VG ${libdir}/pkgconfig/vg.pc"
 FILES_libxvmcsoftpipe-dev = "${libdir}/libXvMCsoftpipe.so ${libdir}/libXvMCsoftpipe.la"
 FILES_libxatracker-dev = "${libdir}/libxatracker.so ${libdir}/libxatracker.la \
                           ${includedir}/xa_tracker.h ${includedir}/xa_composite.h ${includedir}/xa_context.h \
                           ${libdir}/pkgconfig/xatracker.pc"
-
-FILES_${PN}-dbg += "${libdir}/dri/.debug/* ${libdir}/egl/.debug/* ${libdir}/gbm/.debug/* ${libdir}/gallium-pipe/.debug"

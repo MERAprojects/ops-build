@@ -9,7 +9,7 @@ LIC_FILES_CHKSUM = "file://COPYING;md5=eb723b61539feef013de476e68b5c50a"
 
 PR = "r9"
 
-SRC_URI = "ftp://ftp.gnupg.org/gcrypt/gnupg/gnupg-${PV}.tar.bz2 \
+SRC_URI = "${GNUPG_MIRROR}/gnupg/gnupg-${PV}.tar.bz2 \
            file://long-long-thumb.patch \
            file://configure.patch \
            file://mips_gcc4.4.patch \
@@ -81,6 +81,9 @@ EXTRA_OECONF = "--disable-ldap \
                 ac_cv_sys_symbol_underscore=no \
 		"
 
+# Force gcc's traditional handling of inline to avoid issues with gcc 5
+CFLAGS += "-fgnu89-inline"
+
 do_install () {
 	autotools_do_install
 	install -d ${D}${docdir}/${BPN}
@@ -95,7 +98,6 @@ FILES_gpgv = "${bindir}/gpgv"
 
 # Exclude debug files from the main packages
 FILES_${PN} = "${bindir}/* ${datadir}/${BPN} ${libexecdir}/${BPN}/*"
-FILES_${PN}-dbg += "${libexecdir}/${BPN}/.debug"
 
 PACKAGECONFIG ??= ""
 PACKAGECONFIG[curl] = "--with-libcurl=${STAGING_LIBDIR},--without-libcurl,curl"

@@ -16,17 +16,15 @@
 # with this program; if not, write to the Free Software Foundation, Inc., 59
 # Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 
-from __future__ import with_statement
 import os
 import tempfile
 import shutil
 
-from wic import kickstart
 from wic import msger
 from wic.utils.errors import CreatorError
-from wic.utils import misc, runner, fs_related as fs
+from wic.utils import runner
 
-class BaseImageCreator(object):
+class BaseImageCreator():
     """Base class for image creation.
 
     BaseImageCreator is the simplest creator class available; it will
@@ -69,7 +67,7 @@ class BaseImageCreator(object):
                      }
 
             # update setting from createopts
-            for key in createopts.keys():
+            for key in createopts:
                 if key in optmap:
                     option = optmap[key]
                 else:
@@ -86,7 +84,7 @@ class BaseImageCreator(object):
         # No ks provided when called by convertor, so skip the dependency check
         if self.ks:
             # If we have btrfs partition we need to check necessary tools
-            for part in self.ks.handler.partition.partitions:
+            for part in self.ks.partitions:
                 if part.fstype and part.fstype == "btrfs":
                     self._dep_checks.append("mkfs.btrfs")
                     break
@@ -133,9 +131,9 @@ class BaseImageCreator(object):
                 os.makedirs(self.workdir)
             self.__builddir = tempfile.mkdtemp(dir=self.workdir,
                                                prefix="imgcreate-")
-        except OSError, (err, msg):
+        except OSError as err:
             raise CreatorError("Failed create build directory in %s: %s" %
-                               (self.tmpdir, msg))
+                               (self.tmpdir, err))
 
     def __setup_tmpdir(self):
         if not self.enabletmpfs:
@@ -187,7 +185,7 @@ class BaseImageCreator(object):
     def print_outimage_info(self):
         msg = "The new image can be found here:\n"
         self.outimage.sort()
-        for file in self.outimage:
-            msg += '  %s\n' % os.path.abspath(file)
+        for path in self.outimage:
+            msg += '  %s\n' % os.path.abspath(path)
 
         msger.info(msg)

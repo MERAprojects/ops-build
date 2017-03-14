@@ -191,8 +191,8 @@ class PythonReferenceTest(ReferenceTest):
         if hasattr(bb.utils, "_context"):
             self.context = bb.utils._context
         else:
-            import __builtin__
-            self.context = __builtin__.__dict__
+            import builtins
+            self.context = builtins.__dict__
 
     def parseExpression(self, exp):
         parsedvar = self.d.expandWithRefs(exp, None)
@@ -293,11 +293,16 @@ bb.data.getVar(a(), d, False)
     def test_python(self):
         self.d.setVar("FOO", self.pydata)
         self.setEmptyVars(["inexpand", "a", "test2", "test"])
-        self.d.setVarFlags("FOO", {"func": True, "python": True})
+        self.d.setVarFlags("FOO", {
+            "func": True,
+            "python": True,
+            "lineno": 1,
+            "filename": "example.bb",
+        })
 
         deps, values = bb.data.build_dependencies("FOO", set(self.d.keys()), set(), set(), self.d)
 
-        self.assertEquals(deps, set(["somevar", "bar", "something", "inexpand", "test", "test2", "a"]))
+        self.assertEqual(deps, set(["somevar", "bar", "something", "inexpand", "test", "test2", "a"]))
 
 
     shelldata = """
@@ -344,7 +349,7 @@ esac
 
         deps, values = bb.data.build_dependencies("FOO", set(self.d.keys()), set(), set(), self.d)
 
-        self.assertEquals(deps, set(["somevar", "inverted"] + execs))
+        self.assertEqual(deps, set(["somevar", "inverted"] + execs))
 
 
     def test_vardeps(self):
@@ -354,7 +359,7 @@ esac
 
         deps, values = bb.data.build_dependencies("FOO", set(self.d.keys()), set(), set(), self.d)
 
-        self.assertEquals(deps, set(["oe_libinstall"]))
+        self.assertEqual(deps, set(["oe_libinstall"]))
 
     def test_vardeps_expand(self):
         self.d.setVar("oe_libinstall", "echo test")
@@ -363,7 +368,7 @@ esac
 
         deps, values = bb.data.build_dependencies("FOO", set(self.d.keys()), set(), set(), self.d)
 
-        self.assertEquals(deps, set(["oe_libinstall"]))
+        self.assertEqual(deps, set(["oe_libinstall"]))
 
     #Currently no wildcard support
     #def test_vardeps_wildcards(self):

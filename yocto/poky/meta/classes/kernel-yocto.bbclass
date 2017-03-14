@@ -1,5 +1,7 @@
 # remove tasks that modify the source tree in case externalsrc is inherited
-SRCTREECOVEREDTASKS += "do_kernel_link_vmlinux do_kernel_configme do_validate_branches do_kernel_configcheck do_kernel_checkout do_shared_workdir do_fetch do_unpack do_patch"
+SRCTREECOVEREDTASKS += "do_kernel_configme do_validate_branches do_kernel_configcheck do_kernel_checkout do_fetch do_unpack do_patch"
+PATCH_GIT_USER_EMAIL ?= "kernel-yocto@oe"
+PATCH_GIT_USER_NAME ?= "OpenEmbedded"
 
 # returns local (absolute) path names for all valid patches in the
 # src_uri
@@ -33,6 +35,7 @@ def find_kernel_feature_dirs(d):
     for url in fetch.urls:
         urldata = fetch.ud[url]
         parm = urldata.parm
+        type=""
         if "type" in parm:
             type = parm["type"]
         if "destsuffix" in parm:
@@ -51,7 +54,9 @@ def get_machine_branch(d, default):
         parm = urldata.parm
         if "branch" in parm:
             branches = urldata.parm.get("branch").split(',')
-            return branches[0]
+            btype = urldata.parm.get("type")
+            if btype != "kmeta":
+                return branches[0]
 	    
     return default
 
@@ -112,66 +117,64 @@ do_kernel_metadata() {
 		fi
 	fi
 
-	# if we have a defined/set meta branch we should not be generating
-	# any meta data. The passed branch has what we need.
-	if [ -n "${KMETA}" ]; then
-		createme_flags="--disable-meta-gen --meta ${KMETA}"
-	fi
-
-	createme -v -v ${createme_flags} ${ARCH} ${machine_branch}
-	if [ $? -ne 0 ]; then
-		bbfatal "Could not create ${machine_branch}"
-	fi
-
 	sccs="$sccs ${@" ".join(find_sccs(d))}"
 	patches="${@" ".join(find_patches(d))}"
 	feat_dirs="${@" ".join(find_kernel_feature_dirs(d))}"
 
-	# add any explicitly referenced features onto the end of the feature
-	# list that is passed to the kernel build scripts.
-	if [ -n "${KERNEL_FEATURES}" ]; then
-		for feat in ${KERNEL_FEATURES}; do
-			addon_features="$addon_features --feature $feat"
-		done
-	fi
-
 	# check for feature directories/repos/branches that were part of the
 	# SRC_URI. If they were supplied, we convert them into include directives
 	# for the update part of the process
-	if [ -n "${feat_dirs}" ]; then
-	    for f in ${feat_dirs}; do
+	for f in ${feat_dirs}; do
 		if [ -d "${WORKDIR}/$f/meta" ]; then
-		    includes="$includes -I${WORKDIR}/$f/meta"
-		elif [ -d "${WORKDIR}/$f" ]; then
-		    includes="$includes -I${WORKDIR}/$f"
+			includes="$includes -I${WORKDIR}/$f/kernel-meta"
+	        elif [ -d "${WORKDIR}/$f" ]; then
+			includes="$includes -I${WORKDIR}/$f"
 		fi
-	    done
+	done
+	for s in ${sccs} ${patches}; do
+		sdir=$(dirname $s)
+		includes="$includes -I${sdir}"
+                # if a SRC_URI passed patch or .scc has a subdir of "kernel-meta",
+                # then we add it to the search path
+                if [ -d "${sdir}/kernel-meta" ]; then
+			includes="$includes -I${sdir}/kernel-meta"
+                fi
+	done
+
+	# expand kernel features into their full path equivalents
+	bsp_definition=$(spp ${includes} --find -DKMACHINE=${KMACHINE} -DKTYPE=${LINUX_KERNEL_TYPE})
+	meta_dir=$(kgit --meta)
+
+	# run1: pull all the configuration fragments, no matter where they come from
+	elements="`echo -n ${bsp_definition} ${sccs} ${patches} ${KERNEL_FEATURES}`"
+	if [ -n "${elements}" ]; then
+		scc --force -o ${S}/${meta_dir}:cfg,meta ${includes} ${bsp_definition} ${sccs} ${patches} ${KERNEL_FEATURES}
+		if [ $? -ne 0 ]; then
+			bbfatal_log "Could not generate configuration queue for ${KMACHINE}."
+		fi
 	fi
 
-	# updates or generates the target description
-	updateme ${updateme_flags} -DKDESC=${KMACHINE}:${LINUX_KERNEL_TYPE} \
-                         ${includes} ${addon_features} ${ARCH} ${KMACHINE} ${sccs} ${patches}
-	if [ $? -ne 0 ]; then
-		bbfatal "Could not update ${machine_branch}"
+	# run2: only generate patches for elements that have been passed on the SRC_URI
+	elements="`echo -n ${sccs} ${patches} ${KERNEL_FEATURES}`"
+	if [ -n "${elements}" ]; then
+		scc --force -o ${S}/${meta_dir}:patch --cmds patch ${includes} ${sccs} ${patches} ${KERNEL_FEATURES}
+		if [ $? -ne 0 ]; then
+			bbfatal_log "Could not generate configuration queue for ${KMACHINE}."
+		fi
 	fi
 }
 
 do_patch() {
 	cd ${S}
 
-	# executes and modifies the source tree as required
-	patchme ${KMACHINE}
-	if [ $? -ne 0 ]; then
-		bberror "Could not apply patches for ${KMACHINE}."
-		bbfatal "Patch failures can be resolved in the linux source directory ${S})"
-	fi
-
-	# check to see if the specified SRCREV is reachable from the final branch.
-	# if it wasn't something wrong has happened, and we should error.
-	if [ "${machine_srcrev}" != "AUTOINC" ]; then
-		if ! [ "$(git rev-parse --verify ${machine_srcrev}~0)" = "$(git merge-base ${machine_srcrev} HEAD)" ]; then
-			bberror "SRCREV ${machine_srcrev} was specified, but is not reachable"
-			bbfatal "Check the BSP description for incorrect branch selection, or other errors."
+	check_git_config
+	meta_dir=$(kgit --meta)
+	(cd ${meta_dir}; ln -sf patch.queue series)
+	if [ -f "${meta_dir}/series" ]; then
+		kgit-s2q --gen -v --patches .kernel-meta/
+		if [ $? -ne 0 ]; then
+			bberror "Could not apply patches for ${KMACHINE}."
+			bbfatal_log "Patch failures can be resolved in the linux source directory ${S})"
 		fi
 	fi
 }
@@ -179,34 +182,25 @@ do_patch() {
 do_kernel_checkout() {
 	set +e
 
-	# A linux yocto SRC_URI should use the bareclone option. That
-	# ensures that all the branches are available in the WORKDIR version
-	# of the repository.
 	source_dir=`echo ${S} | sed 's%/$%%'`
 	source_workdir="${WORKDIR}/git"
-	if [ -d "${WORKDIR}/git/" ] && [ -d "${WORKDIR}/git/.git" ]; then
-		# case2: the repository is a non-bare clone
-
+	if [ -d "${WORKDIR}/git/" ]; then
+		# case: git repository
 		# if S is WORKDIR/git, then we shouldn't be moving or deleting the tree.
 		if [ "${source_dir}" != "${source_workdir}" ]; then
-			rm -rf ${S}
-			mv ${WORKDIR}/git ${S}
+			if [ -d "${source_workdir}/.git" ]; then
+				# regular git repository with .git
+				rm -rf ${S}
+				mv ${WORKDIR}/git ${S}
+			else
+				# create source for bare cloned git repository
+				git clone ${WORKDIR}/git ${S}
+				rm -rf ${WORKDIR}/git
+			fi
 		fi
 		cd ${S}
-	elif [ -d "${WORKDIR}/git/" ] && [ ! -d "${WORKDIR}/git/.git" ]; then
-		# case2: the repository is a bare clone
-
-		# if S is WORKDIR/git, then we shouldn't be moving or deleting the tree.
-		if [ "${source_dir}" != "${source_workdir}" ]; then
-			rm -rf ${S}
-			mkdir -p ${S}/.git
-			mv ${WORKDIR}/git/* ${S}/.git
-			rm -rf ${WORKDIR}/git/
-		fi
-		cd ${S}	
-		git config core.bare false
 	else
-		# case 3: we have no git repository at all. 
+		# case: we have no git repository at all. 
 		# To support low bandwidth options for building the kernel, we'll just 
 		# convert the tree to a git repo and let the rest of the process work unchanged
 		
@@ -225,7 +219,6 @@ do_kernel_checkout() {
 		git commit -q -m "baseline commit: creating repo for ${PN}-${PV}"
 		git clean -d -f
 	fi
-	# end debare
 
 	# convert any remote branches to local tracking ones
 	for i in `git branch -a --no-color | grep remotes | grep -v HEAD`; do
@@ -236,24 +229,8 @@ do_kernel_checkout() {
 		fi
 	done
 
-       	# If KMETA is defined, the branch must exist, but a machine branch
-	# can be missing since it may be created later by the tools.
-	if [ -n "${KMETA}" ]; then
-		git show-ref --quiet --verify -- "refs/heads/${KMETA}"
-		if [ $? -eq 1 ]; then
-			bberror "The branch '${KMETA}' is required and was not found"
-			bberror "Ensure that the SRC_URI points to a valid linux-yocto"
-			bbfatal "kernel repository"
-		fi
-	fi
-	
-
 	# Create a working tree copy of the kernel by checking out a branch
 	machine_branch="${@ get_machine_branch(d, "${KBRANCH}" )}"
-	git show-ref --quiet --verify -- "refs/heads/${machine_branch}"
-	if [ $? -ne 0 ]; then
-		machine_branch="master"
-	fi
 
 	# checkout and clobber any unimportant files
 	git checkout -f ${machine_branch}
@@ -261,31 +238,42 @@ do_kernel_checkout() {
 do_kernel_checkout[dirs] = "${S}"
 
 addtask kernel_checkout before do_kernel_metadata after do_unpack
-addtask kernel_metadata after do_validate_branches before do_patch
+addtask kernel_metadata after do_validate_branches do_unpack before do_patch
 do_kernel_metadata[depends] = "kern-tools-native:do_populate_sysroot"
 
 do_kernel_configme[dirs] += "${S} ${B}"
 do_kernel_configme() {
-	bbnote "kernel configme"
-	export KMETA=${KMETA}
+	set +e
 
-	if [ -n "${KCONFIG_MODE}" ]; then
-		configmeflags=${KCONFIG_MODE}
-	else
-		# If a defconfig was passed, use =n as the baseline, which is achieved
-		# via --allnoconfig
+	# translate the kconfig_mode into something that merge_config.sh
+	# understands
+	case ${KCONFIG_MODE} in
+		*allnoconfig)
+			config_flags="-n"
+			;;
+		*alldefconfig)
+			config_flags=""
+			;;
+	    *)
 		if [ -f ${WORKDIR}/defconfig ]; then
-			configmeflags="--allnoconfig"
+			config_flags="-n"
 		fi
-	fi
+	    ;;
+	esac
 
 	cd ${S}
-	PATH=${PATH}:${S}/scripts/util
-	configme ${configmeflags} --reconfig --output ${B} ${LINUX_KERNEL_TYPE} ${KMACHINE}
-	if [ $? -ne 0 ]; then
-		bbfatal "Could not configure ${KMACHINE}-${LINUX_KERNEL_TYPE}"
+
+	meta_dir=$(kgit --meta)
+	configs="$(scc --configs -o ${meta_dir})"
+	if [ -z "${configs}" ]; then
+		bbfatal_log "Could not find configuration queue (${meta_dir}/config.queue)"
 	fi
-	
+
+	CFLAGS="${CFLAGS} ${TOOLCHAIN_OPTIONS}"	ARCH=${ARCH} merge_config.sh -O ${B} ${config_flags} ${configs} > ${meta_dir}/cfg/merge_config_build.log 2>&1
+	if [ $? -ne 0 ]; then
+		bbfatal_log "Could not configure ${KMACHINE}-${LINUX_KERNEL_TYPE}"
+	fi
+
 	echo "# Global settings from linux recipe" >> ${B}/.config
 	echo "CONFIG_LOCALVERSION="\"${LINUX_VERSION_EXTENSION}\" >> ${B}/.config
 }
@@ -303,36 +291,23 @@ python do_kernel_configcheck() {
         kmeta = "." + kmeta
 
     pathprefix = "export PATH=%s:%s; " % (d.getVar('PATH', True), "${S}/scripts/util/")
-    cmd = d.expand("cd ${S}; kconf_check -config- %s/meta-series ${S} ${B}" % kmeta)
+
+    cmd = d.expand("scc --configs -o ${S}/.kernel-meta")
+    ret, configs = oe.utils.getstatusoutput("%s%s" % (pathprefix, cmd))
+
+    cmd = d.expand("cd ${S}; kconf_check --report -o ${S}/%s/cfg/ ${B}/.config ${S} %s" % (kmeta,configs))
     ret, result = oe.utils.getstatusoutput("%s%s" % (pathprefix, cmd))
 
     config_check_visibility = int(d.getVar( "KCONF_AUDIT_LEVEL", True ) or 0)
     bsp_check_visibility = int(d.getVar( "KCONF_BSP_AUDIT_LEVEL", True ) or 0)
 
     # if config check visibility is non-zero, report dropped configuration values
-    mismatch_file = "${S}/" + kmeta + "/" + "mismatch.cfg"
+    mismatch_file = d.expand("${S}/%s/cfg/mismatch.txt" % kmeta)
     if os.path.exists(mismatch_file):
         if config_check_visibility:
             with open (mismatch_file, "r") as myfile:
                 results = myfile.read()
                 bb.warn( "[kernel config]: specified values did not make it into the kernel's final configuration:\n\n%s" % results)
-
-    # if config check visibility is level 2 or higher, report non-hardware options
-    nonhw_file = "${S}/" + kmeta + "/" + "nonhw_report.cfg"
-    if os.path.exists(nonhw_file):
-        if config_check_visibility > 1:
-            with open (nonhw_file, "r") as myfile:
-                results = myfile.read()
-                bb.warn( "[kernel config]: BSP specified non-hw configuration:\n\n%s" % results)
-
-    bsp_desc = "${S}/" + kmeta + "/" + "top_tgt"
-    if os.path.exists(bsp_desc) and bsp_check_visibility > 1:
-        with open (bsp_desc, "r") as myfile:
-            bsp_tgt = myfile.read()
-            m = re.match("^(.*)scratch.obj(.*)$", bsp_tgt)
-            if not m is None:
-                bb.warn( "[kernel]: An auto generated BSP description was used, this normally indicates a misconfiguration.\n" +
-                         "Check that your machine (%s) has an associated kernel description." % "${MACHINE}" )
 }
 
 # Ensure that the branches (BSP and meta) are on the locations specified by
@@ -341,7 +316,6 @@ python do_kernel_configcheck() {
 do_validate_branches() {
 	set +e
 	cd ${S}
-	export KMETA=${KMETA}
 
 	machine_branch="${@ get_machine_branch(d, "${KBRANCH}" )}"
 	machine_srcrev="${SRCREV_machine}"
@@ -362,31 +336,9 @@ do_validate_branches() {
 		git cat-file -t ${machine_srcrev} > /dev/null
 		if [ $? -ne 0 ]; then
 			bberror "${machine_srcrev} is not a valid commit ID."
-			bbfatal "The kernel source tree may be out of sync"
+			bbfatal_log "The kernel source tree may be out of sync"
 		fi
 		force_srcrev=${machine_srcrev}
-	fi
-
-	## KMETA branch validation.
-	target_meta_head="${SRCREV_meta}"
-	if [ "${target_meta_head}" = "AUTOINC" ] || [ "${target_meta_head}" = "" ]; then
-		bbnote "SRCREV validation skipped for AUTOREV or empty meta branch"
-	else
-	 	meta_head=`git show-ref -s --heads ${KMETA}`
-
-		git cat-file -t ${target_meta_head} > /dev/null
-		if [ $? -ne 0 ]; then
-			bberror "${target_meta_head} is not a valid commit ID"
-			bbfatal "The kernel source tree may be out of sync"
-		fi
-		if [ "$meta_head" != "$target_meta_head" ]; then
-			bbnote "Setting branch ${KMETA} to ${target_meta_head}"
-			git branch -m ${KMETA} ${KMETA}-orig
-			git checkout -q -b ${KMETA} ${target_meta_head}
-			if [ $? -ne 0 ];then
-				bbfatal "Could not checkout ${KMETA} branch from known hash ${target_meta_head}"
-			fi
-		fi
 	fi
 
 	git checkout -q -f ${machine_branch}

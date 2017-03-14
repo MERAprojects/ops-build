@@ -17,8 +17,8 @@ python do_install () {
 }
 
 python do_install_config () {
-    indir = os.path.dirname(d.getVar('FILE',1))
-    infile = file(oe.path.join(indir, 'files', 'apt.conf'), 'r')
+    indir = os.path.dirname(d.getVar('FILE', True))
+    infile = open(oe.path.join(indir, 'files', 'apt.conf'), 'r')
     data = infile.read()
     infile.close()
 
@@ -30,7 +30,7 @@ python do_install_config () {
 
     outpath = oe.path.join(outdir, 'apt.conf.sample')
     if not os.path.exists(outpath):
-        outfile = file(outpath, 'w')
+        outfile = open(outpath, 'w')
         outfile.write(data)
         outfile.close()
 }
@@ -47,12 +47,8 @@ do_install_base () {
 
 	oe_libinstall -so -C bin libapt-private ${D}${libdir}/
 
-	eval `cat environment.mak | grep ^GLIBC_VER | sed -e's, = ,=,'`
-	eval `cat environment.mak | grep ^LIBSTDCPP_VER | sed -e's, = ,=,'`
 	oe_libinstall -so -C bin libapt-pkg$GLIBC_VER$LIBSTDCPP_VER ${D}${libdir}/
-	ln -sf libapt-pkg$GLIBC_VER$LIBSTDCPP_VER.so ${D}${libdir}/libapt-pkg.so
 	oe_libinstall -so -C bin libapt-inst$GLIBC_VER$LIBSTDCPP_VER ${D}${libdir}/
-	ln -sf libapt-inst$GLIBC_VER$LIBSTDCPP_VER.so ${D}${libdir}/libapt-inst.so
 
 	install -d ${D}${libdir}/apt/methods
 	install -m 0755 bin/methods/* ${D}${libdir}/apt/methods/

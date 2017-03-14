@@ -30,10 +30,9 @@ PACKAGECONFIG[pam] = "--enable-pam-module --with-pam-module-dir=${base_libdir}/s
 PACKAGECONFIG[policykit] = "--with-polkit,--without-polkit,polkit"
 PACKAGECONFIG[systemd] = "--with-systemdsystemunitdir=${systemd_unitdir}/system/,--with-systemdsystemunitdir="
 
-FILES_${PN} += "${localstatedir}/log/ConsoleKit ${exec_prefix}/lib/ConsoleKit \
+FILES_${PN} += "${exec_prefix}/lib/ConsoleKit \
                 ${libdir}/ConsoleKit  ${systemd_unitdir} ${base_libdir} \
                 ${datadir}/dbus-1 ${datadir}/PolicyKit ${datadir}/polkit*"
-FILES_${PN}-dbg += "${base_libdir}/security/.debug"
 
 PACKAGES =+ "pam-plugin-ck-connector"
 FILES_pam-plugin-ck-connector += "${base_libdir}/security/*.so"
@@ -46,6 +45,6 @@ do_install_append() {
 			> ${D}${sysconfdir}/tmpfiles.d/consolekit.conf
 	fi
 
-	# Remove /var/run from package as console-kit-daemon will populate it on startup
-	rm -fr "${D}${localstatedir}/run"
+	# Remove /var/ directories as the daemon creates them as required
+	rm -rf ${D}${localstatedir}
 }

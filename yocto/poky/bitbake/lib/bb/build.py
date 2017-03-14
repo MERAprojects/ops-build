@@ -35,8 +35,8 @@ import stat
 import bb
 import bb.msg
 import bb.process
-from contextlib import nested
-from bb import event, utils
+import bb.progress
+from bb import data, event, utils
 
 bblogger = logging.getLogger('BitBake')
 logger = logging.getLogger('BitBake.Build')
@@ -61,8 +61,13 @@ def reset_cache():
 # in all namespaces, hence we add them to __builtins__.
 # If we do not do this and use the exec globals, they will
 # not be available to subfunctions.
-__builtins__['bb'] = bb
-__builtins__['os'] = os
+if hasattr(__builtins__, '__setitem__'):
+    builtins = __builtins__
+else:
+    builtins = __builtins__.__dict__
+
+builtins['bb'] = bb
+builtins['os'] = os
 
 class FuncFailed(Exception):
     def __init__(self, name = None, logfile = None):
@@ -87,6 +92,7 @@ class TaskBase(event.Event):
     def __init__(self, t, logfile, d):
         self._task = t
         self._package = d.getVar("PF", True)
+        self._mc = d.getVar("BB_CURRENT_MC", True)
         self.taskfile = d.getVar("FILE", True)
         self.taskname = self._task
         self.logfile = logfile
@@ -133,6 +139,25 @@ class TaskInvalid(TaskBase):
         super(TaskInvalid, self).__init__(task, None, metadata)
         self._message = "No such task '%s'" % task
 
+class TaskProgress(event.Event):
+    """
+    Task made some progress that could be reported to the user, usually in
+    the form of a progress bar or similar.
+    NOTE: this class does not inherit from TaskBase since it doesn't need
+    to - it's fired within the task context itself, so we don't have any of
+    the context information that you do in the case of the other events.
+    The event PID can be used to determine which task it came from.
+    The progress value is normally 0-100, but can also be negative
+    indicating that progress has been made but we aren't able to determine
+    how much.
+    The rate is optional, this is simply an extra string to display to the
+    user if specified.
+    """
+    def __init__(self, progress, rate=None):
+        self.progress = progress
+        self.rate = rate
+        event.Event.__init__(self)
+
 
 class LogTee(object):
     def __init__(self, logger, outfile):
@@ -156,14 +181,18 @@ class LogTee(object):
     def flush(self):
         self.outfile.flush()
 
-def exec_func(func, d, dirs = None):
+#
+# pythonexception allows the python exceptions generated to be raised
+# as the real exceptions (not FuncFailed) and without a backtrace at the 
+# origin of the failure.
+#
+def exec_func(func, d, dirs = None, pythonexception=False):
     """Execute a BB 'function'"""
 
-    body = d.getVar(func)
-    if not body:
-        if body is None:
-            logger.warn("Function %s doesn't exist", func)
-        return
+    try:
+        oldcwd = os.getcwd()
+    except:
+        oldcwd = None
 
     flags = d.getVarFlags(func)
     cleandirs = flags.get('cleandirs')
@@ -182,8 +211,13 @@ def exec_func(func, d, dirs = None):
             bb.utils.mkdirhier(adir)
         adir = dirs[-1]
     else:
-        adir = d.getVar('B', True)
-        bb.utils.mkdirhier(adir)
+        adir = None
+
+    body = d.getVar(func, False)
+    if not body:
+        if body is None:
+            logger.warning("Function %s doesn't exist", func)
+        return
 
     ispython = flags.get('python')
 
@@ -224,22 +258,30 @@ def exec_func(func, d, dirs = None):
 
     with bb.utils.fileslocked(lockfiles):
         if ispython:
-            exec_func_python(func, d, runfile, cwd=adir)
+            exec_func_python(func, d, runfile, cwd=adir, pythonexception=pythonexception)
         else:
             exec_func_shell(func, d, runfile, cwd=adir)
 
-_functionfmt = """
-def {function}(d):
-{body}
+    try:
+        curcwd = os.getcwd()
+    except:
+        curcwd = None
 
+    if oldcwd and curcwd != oldcwd:
+        try:
+            bb.warn("Task %s changed cwd to %s" % (func, curcwd))
+            os.chdir(oldcwd)
+        except:
+            pass
+
+_functionfmt = """
 {function}(d)
 """
 logformatter = bb.msg.BBLogFormatter("%(levelname)s: %(message)s")
-def exec_func_python(func, d, runfile, cwd=None):
+def exec_func_python(func, d, runfile, cwd=None, pythonexception=False):
     """Execute a python BB 'function'"""
 
-    bbfile = d.getVar('FILE', True)
-    code = _functionfmt.format(function=func, body=d.getVar(func, True))
+    code = _functionfmt.format(function=func)
     bb.utils.mkdirhier(os.path.dirname(runfile))
     with open(runfile, 'w') as script:
         bb.data.emit_func_python(func, script, d)
@@ -247,18 +289,26 @@ def exec_func_python(func, d, runfile, cwd=None):
     if cwd:
         try:
             olddir = os.getcwd()
-        except OSError:
+        except OSError as e:
+            bb.warn("%s: Cannot get cwd: %s" % (func, e))
             olddir = None
         os.chdir(cwd)
 
     bb.debug(2, "Executing python function %s" % func)
 
     try:
-        comp = utils.better_compile(code, func, bbfile)
-        utils.better_exec(comp, {"d": d}, code, bbfile)
+        text = "def %s(d):\n%s" % (func, d.getVar(func, False))
+        fn = d.getVarFlag(func, "filename", False)
+        lineno = int(d.getVarFlag(func, "lineno", False))
+        bb.methodpool.insert_method(func, text, fn, lineno - 1)
+
+        comp = utils.better_compile(code, func, "exec_python_func() autogenerated")
+        utils.better_exec(comp, {"d": d}, code, "exec_python_func() autogenerated", pythonexception=pythonexception)
     except (bb.parse.SkipRecipe, bb.build.FuncFailed):
         raise
     except:
+        if pythonexception:
+            raise
         raise FuncFailed(func, None)
     finally:
         bb.debug(2, "Python function %s finished" % func)
@@ -266,8 +316,8 @@ def exec_func_python(func, d, runfile, cwd=None):
         if cwd and olddir:
             try:
                 os.chdir(olddir)
-            except OSError:
-                pass
+            except OSError as e:
+                bb.warn("%s: Cannot restore cwd %s: %s" % (func, olddir, e))
 
 def shell_trap_code():
     return '''#!/bin/sh\n
@@ -277,9 +327,8 @@ bb_exit_handler() {
     case $ret in
     0)  ;;
     *)  case $BASH_VERSION in
-        "")   echo "WARNING: exit code $ret from a shell command.";;
-        *)    echo "WARNING: ${BASH_SOURCE[0]}:${BASH_LINENO[0]} exit $ret from
-  \"$BASH_COMMAND\"";;
+        "") echo "WARNING: exit code $ret from a shell command.";;
+        *)  echo "WARNING: ${BASH_SOURCE[0]}:${BASH_LINENO[0]} exit $ret from '$BASH_COMMAND'";;
         esac
         exit $ret
     esac
@@ -313,13 +362,13 @@ def exec_func_shell(func, d, runfile, cwd=None):
 # cleanup
 ret=$?
 trap '' 0
-exit $?
+exit $ret
 ''')
 
-    os.chmod(runfile, 0775)
+    os.chmod(runfile, 0o775)
 
     cmd = runfile
-    if d.getVarFlag(func, 'fakeroot'):
+    if d.getVarFlag(func, 'fakeroot', False):
         fakerootcmd = d.getVar('FAKEROOT', True)
         if fakerootcmd:
             cmd = [fakerootcmd, runfile]
@@ -329,14 +378,75 @@ exit $?
     else:
         logfile = sys.stdout
 
-    bb.debug(2, "Executing shell function %s" % func)
+    progress = d.getVarFlag(func, 'progress', True)
+    if progress:
+        if progress == 'percent':
+            # Use default regex
+            logfile = bb.progress.BasicProgressHandler(d, outfile=logfile)
+        elif progress.startswith('percent:'):
+            # Use specified regex
+            logfile = bb.progress.BasicProgressHandler(d, regex=progress.split(':', 1)[1], outfile=logfile)
+        elif progress.startswith('outof:'):
+            # Use specified regex
+            logfile = bb.progress.OutOfProgressHandler(d, regex=progress.split(':', 1)[1], outfile=logfile)
+        else:
+            bb.warn('%s: invalid task progress varflag value "%s", ignoring' % (func, progress))
 
-    try:
-        with open(os.devnull, 'r+') as stdin:
-            bb.process.run(cmd, shell=False, stdin=stdin, log=logfile)
-    except bb.process.CmdError:
-        logfn = d.getVar('BB_LOGFILE', True)
-        raise FuncFailed(func, logfn)
+    fifobuffer = bytearray()
+    def readfifo(data):
+        nonlocal fifobuffer
+        fifobuffer.extend(data)
+        while fifobuffer:
+            message, token, nextmsg = fifobuffer.partition(b"\00")
+            if token:
+                splitval = message.split(b' ', 1)
+                cmd = splitval[0].decode("utf-8")
+                if len(splitval) > 1:
+                    value = splitval[1].decode("utf-8")
+                else:
+                    value = ''
+                if cmd == 'bbplain':
+                    bb.plain(value)
+                elif cmd == 'bbnote':
+                    bb.note(value)
+                elif cmd == 'bbwarn':
+                    bb.warn(value)
+                elif cmd == 'bberror':
+                    bb.error(value)
+                elif cmd == 'bbfatal':
+                    # The caller will call exit themselves, so bb.error() is
+                    # what we want here rather than bb.fatal()
+                    bb.error(value)
+                elif cmd == 'bbfatal_log':
+                    bb.error(value, forcelog=True)
+                elif cmd == 'bbdebug':
+                    splitval = value.split(' ', 1)
+                    level = int(splitval[0])
+                    value = splitval[1]
+                    bb.debug(level, value)
+                else:
+                    bb.warn("Unrecognised command '%s' on FIFO" % cmd)
+                fifobuffer = nextmsg
+            else:
+                break
+
+    tempdir = d.getVar('T', True)
+    fifopath = os.path.join(tempdir, 'fifo.%s' % os.getpid())
+    if os.path.exists(fifopath):
+        os.unlink(fifopath)
+    os.mkfifo(fifopath)
+    with open(fifopath, 'r+b', buffering=0) as fifo:
+        try:
+            bb.debug(2, "Executing shell function %s" % func)
+
+            try:
+                with open(os.devnull, 'r+') as stdin:
+                    bb.process.run(cmd, shell=False, stdin=stdin, log=logfile, extrafiles=[(fifo,readfifo)])
+            except bb.process.CmdError:
+                logfn = d.getVar('BB_LOGFILE', True)
+                raise FuncFailed(func, logfn)
+        finally:
+            os.unlink(fifopath)
 
     bb.debug(2, "Shell function %s finished" % func)
 
@@ -356,7 +466,7 @@ def _exec_task(fn, task, d, quieterr):
     Execution of a task involves a bit more setup than executing a function,
     running it with its own local metadata, and with some useful variables set.
     """
-    if not d.getVarFlag(task, 'task'):
+    if not d.getVarFlag(task, 'task', False):
         event.fire(TaskInvalid(task, d), d)
         logger.error("No such task: %s" % task)
         return 1
@@ -375,6 +485,13 @@ def _exec_task(fn, task, d, quieterr):
         nice = int(nice) - curnice
         newnice = os.nice(nice)
         logger.debug(1, "Renice to %s " % newnice)
+    ionice = localdata.getVar("BB_TASK_IONICE_LEVEL", True)
+    if ionice:
+        try:
+            cls, prio = ionice.split(".", 1)
+            bb.utils.ioprio_set(os.getpid(), int(cls), int(prio))
+        except:
+            bb.warn("Invalid ionice level %s" % ionice)
 
     bb.utils.mkdirhier(tempdir)
 
@@ -410,7 +527,10 @@ def _exec_task(fn, task, d, quieterr):
             self.triggered = False
             logging.Handler.__init__(self, logging.ERROR)
         def emit(self, record):
-            self.triggered = True
+            if getattr(record, 'forcelog', False):
+                self.triggered = False
+            else:
+                self.triggered = True
 
     # Handle logfiles
     si = open('/dev/null', 'r')
@@ -446,21 +566,32 @@ def _exec_task(fn, task, d, quieterr):
 
     flags = localdata.getVarFlags(task)
 
-    event.fire(TaskStarted(task, logfn, flags, localdata), localdata)
     try:
-        for func in (prefuncs or '').split():
-            exec_func(func, localdata)
-        exec_func(task, localdata)
-        for func in (postfuncs or '').split():
-            exec_func(func, localdata)
-    except FuncFailed as exc:
-        if quieterr:
-            event.fire(TaskFailedSilent(task, logfn, localdata), localdata)
-        else:
-            errprinted = errchk.triggered
+        try:
+            event.fire(TaskStarted(task, logfn, flags, localdata), localdata)
+        except (bb.BBHandledException, SystemExit):
+            return 1
+        except FuncFailed as exc:
             logger.error(str(exc))
-            event.fire(TaskFailed(task, logfn, localdata, errprinted), localdata)
-        return 1
+            return 1
+
+        try:
+            for func in (prefuncs or '').split():
+                exec_func(func, localdata)
+            exec_func(task, localdata)
+            for func in (postfuncs or '').split():
+                exec_func(func, localdata)
+        except FuncFailed as exc:
+            if quieterr:
+                event.fire(TaskFailedSilent(task, logfn, localdata), localdata)
+            else:
+                errprinted = errchk.triggered
+                logger.error(str(exc))
+                event.fire(TaskFailed(task, logfn, localdata, errprinted), localdata)
+            return 1
+        except bb.BBHandledException:
+            event.fire(TaskFailed(task, logfn, localdata, True), localdata)
+            return 1
     finally:
         sys.stdout.flush()
         sys.stderr.flush()
@@ -485,7 +616,7 @@ def _exec_task(fn, task, d, quieterr):
             bb.utils.remove(loglink)
     event.fire(TaskSucceeded(task, logfn, localdata), localdata)
 
-    if not localdata.getVarFlag(task, 'nostamp') and not localdata.getVarFlag(task, 'selfstamp'):
+    if not localdata.getVarFlag(task, 'nostamp', False) and not localdata.getVarFlag(task, 'selfstamp', False):
         make_stamp(task, localdata)
 
     return 0
@@ -493,7 +624,7 @@ def _exec_task(fn, task, d, quieterr):
 def exec_task(fn, task, d, profile = False):
     try:
         quieterr = False
-        if d.getVarFlag(task, "quieterrors") is not None:
+        if d.getVarFlag(task, "quieterrors", False) is not None:
             quieterr = True
 
         if profile:
@@ -520,7 +651,7 @@ def exec_task(fn, task, d, profile = False):
             event.fire(failedevent, d)
         return 1
 
-def stamp_internal(taskname, d, file_name, baseonly=False):
+def stamp_internal(taskname, d, file_name, baseonly=False, noextra=False):
     """
     Internal stamp helper function
     Makes sure the stamp directory exists
@@ -534,15 +665,17 @@ def stamp_internal(taskname, d, file_name, baseonly=False):
         taskflagname = taskname.replace("_setscene", "")
 
     if file_name:
-        stamp = d.stamp_base[file_name].get(taskflagname) or d.stamp[file_name]
+        stamp = d.stamp[file_name]
         extrainfo = d.stamp_extrainfo[file_name].get(taskflagname) or ""
     else:
-        stamp = d.getVarFlag(taskflagname, 'stamp-base', True) or d.getVar('STAMP', True)
+        stamp = d.getVar('STAMP', True)
         file_name = d.getVar('BB_FILENAME', True)
         extrainfo = d.getVarFlag(taskflagname, 'stamp-extra-info', True) or ""
 
     if baseonly:
         return stamp
+    if noextra:
+        extrainfo = ""
 
     if not stamp:
         return
@@ -568,10 +701,10 @@ def stamp_cleanmask_internal(taskname, d, file_name):
         taskflagname = taskname.replace("_setscene", "")
 
     if file_name:
-        stamp = d.stamp_base_clean[file_name].get(taskflagname) or d.stampclean[file_name]
+        stamp = d.stampclean[file_name]
         extrainfo = d.stamp_extrainfo[file_name].get(taskflagname) or ""
     else:
-        stamp = d.getVarFlag(taskflagname, 'stamp-base-clean', True) or d.getVar('STAMPCLEAN', True)
+        stamp = d.getVar('STAMPCLEAN', True)
         file_name = d.getVar('BB_FILENAME', True)
         extrainfo = d.getVarFlag(taskflagname, 'stamp-extra-info', True) or ""
 
@@ -591,7 +724,7 @@ def make_stamp(task, d, file_name = None):
     for mask in cleanmask:
         for name in glob.glob(mask):
             # Preserve sigdata files in the stamps directory
-            if "sigdata" in name:
+            if "sigdata" in name or "sigbasedata" in name:
                 continue
             # Preserve taint files in the stamps directory
             if name.endswith('.taint'):
@@ -638,15 +771,15 @@ def write_taint(task, d, file_name = None):
     with open(taintfn, 'w') as taintf:
         taintf.write(str(uuid.uuid4()))
 
-def stampfile(taskname, d, file_name = None):
+def stampfile(taskname, d, file_name = None, noextra=False):
     """
     Return the stamp for a given task
     (d can be a data dict or dataCache)
     """
-    return stamp_internal(taskname, d, file_name)
+    return stamp_internal(taskname, d, file_name, noextra=noextra)
 
-def add_tasks(tasklist, deltasklist, d):
-    task_deps = d.getVar('_task_deps')
+def add_tasks(tasklist, d):
+    task_deps = d.getVar('_task_deps', False)
     if not task_deps:
         task_deps = {}
     if not 'tasks' in task_deps:
@@ -656,9 +789,6 @@ def add_tasks(tasklist, deltasklist, d):
 
     for task in tasklist:
         task = d.expand(task)
-
-        if task in deltasklist:
-            continue
 
         d.setVarFlag(task, 'task', 1)
 
@@ -696,12 +826,12 @@ def addtask(task, before, after, d):
         task = "do_" + task
 
     d.setVarFlag(task, "task", 1)
-    bbtasks = d.getVar('__BBTASKS') or []
-    if not task in bbtasks:
+    bbtasks = d.getVar('__BBTASKS', False) or []
+    if task not in bbtasks:
         bbtasks.append(task)
     d.setVar('__BBTASKS', bbtasks)
 
-    existing = d.getVarFlag(task, "deps") or []
+    existing = d.getVarFlag(task, "deps", False) or []
     if after is not None:
         # set up deps for function
         for entry in after.split():
@@ -711,7 +841,7 @@ def addtask(task, before, after, d):
     if before is not None:
         # set up things that depend on this func
         for entry in before.split():
-            existing = d.getVarFlag(entry, "deps") or []
+            existing = d.getVarFlag(entry, "deps", False) or []
             if task not in existing:
                 d.setVarFlag(entry, "deps", [task] + existing)
 
@@ -719,8 +849,15 @@ def deltask(task, d):
     if task[:3] != "do_":
         task = "do_" + task
 
-    bbtasks = d.getVar('__BBDELTASKS') or []
-    if not task in bbtasks:
-        bbtasks.append(task)
-    d.setVar('__BBDELTASKS', bbtasks)
+    bbtasks = d.getVar('__BBTASKS', False) or []
+    if task in bbtasks:
+        bbtasks.remove(task)
+        d.delVarFlag(task, 'task')
+        d.setVar('__BBTASKS', bbtasks)
 
+    d.delVarFlag(task, 'deps')
+    for bbtask in d.getVar('__BBTASKS', False) or []:
+        deps = d.getVarFlag(bbtask, 'deps', False) or []
+        if task in deps:
+            deps.remove(task)
+            d.setVarFlag(bbtask, 'deps', deps)

@@ -58,12 +58,12 @@ def write_rpm_perfiledata(srcname, d):
     try:
         dependsfile = open(outdepends, 'w')
     except OSError:
-        raise bb.build.FuncFailed("unable to open spec file for writing.")
+        bb.fatal("unable to open spec file for writing")
 
     dump_filerdeps('RDEPENDS', dependsfile, d)
 
     dependsfile.close()
-    os.chmod(outdepends, 0755)
+    os.chmod(outdepends, 0o755)
 
     # OE-core / RPM Provides
     outprovides = workdir + "/" + srcname + ".provides"
@@ -71,12 +71,12 @@ def write_rpm_perfiledata(srcname, d):
     try:
         providesfile = open(outprovides, 'w')
     except OSError:
-        raise bb.build.FuncFailed("unable to open spec file for writing.")
+        bb.fatal("unable to open spec file for writing")
 
     dump_filerdeps('RPROVIDES', providesfile, d)
 
     providesfile.close()
-    os.chmod(outprovides, 0755)
+    os.chmod(outprovides, 0o755)
 
     return (outdepends, outprovides)
 
@@ -196,6 +196,7 @@ python write_specfile () {
             path = rootpath.replace(walkpath, "")
             if path.endswith("DEBIAN") or path.endswith("CONTROL"):
                 continue
+            path = path.replace("%", "%%%%%%%%")
 
             # Treat all symlinks to directories as normal files.
             # os.walk() lists them as directories.
@@ -214,6 +215,7 @@ python write_specfile () {
                 for dir in dirs:
                     if dir == "CONTROL" or dir == "DEBIAN":
                         continue
+                    dir = dir.replace("%", "%%%%%%%%")
                     # All packages own the directories their files are in...
                     target.append('%dir "' + path + '/' + dir + '"')
             else:
@@ -227,6 +229,7 @@ python write_specfile () {
             for file in files:
                 if file == "CONTROL" or file == "DEBIAN":
                     continue
+                file = file.replace("%", "%%%%%%%%")
                 if conffiles.count(path + '/' + file):
                     target.append('%config "' + path + '/' + file + '"')
                 else:
@@ -330,7 +333,7 @@ python write_specfile () {
             pkgname = pkg
         localdata.setVar('PKG', pkgname)
 
-        localdata.setVar('OVERRIDES', pkg)
+        localdata.setVar('OVERRIDES', d.getVar("OVERRIDES", False) + ":" + pkg)
 
         bb.data.update_data(localdata)
 
@@ -395,7 +398,7 @@ python write_specfile () {
 
             file_list = []
             walk_files(root, file_list, conffiles, dirfiles)
-            if not file_list and localdata.getVar('ALLOW_EMPTY') != "1":
+            if not file_list and localdata.getVar('ALLOW_EMPTY', False) != "1":
                 bb.note("Not creating empty RPM package for %s" % splitname)
             else:
                 bb.note("Creating RPM package for %s" % splitname)
@@ -504,7 +507,7 @@ python write_specfile () {
         # Now process files
         file_list = []
         walk_files(root, file_list, conffiles, dirfiles)
-        if not file_list and localdata.getVar('ALLOW_EMPTY') != "1":
+        if not file_list and localdata.getVar('ALLOW_EMPTY', False) != "1":
             bb.note("Not creating empty RPM package for %s" % splitname)
         else:
             spec_files_bottom.append('%%files -n %s' % splitname)
@@ -614,7 +617,7 @@ python write_specfile () {
     try:
         specfile = open(outspecfile, 'w')
     except OSError:
-        raise bb.build.FuncFailed("unable to open spec file for writing.")
+        bb.fatal("unable to open spec file for writing")
 
     # RPMSPEC_PREAMBLE is a way to add arbitrary text to the top
     # of the generated spec file
@@ -642,6 +645,8 @@ python write_specfile () {
 
     specfile.close()
 }
+# Otherwise allarch packages may change depending on override configuration
+write_specfile[vardepsexclude] = "OVERRIDES"
 
 python do_package_rpm () {
     # We need a simple way to remove the MLPREFIX from the package name,
@@ -692,10 +697,12 @@ python do_package_rpm () {
     else:
         d.setVar('PACKAGE_ARCH_EXTEND', package_arch)
     pkgwritedir = d.expand('${PKGWRITEDIRRPM}/${PACKAGE_ARCH_EXTEND}')
+    d.setVar('RPM_PKGWRITEDIR', pkgwritedir)
+    bb.debug(1, 'PKGWRITEDIR: %s' % d.getVar('RPM_PKGWRITEDIR', True))
     pkgarch = d.expand('${PACKAGE_ARCH_EXTEND}${HOST_VENDOR}-${HOST_OS}')
     magicfile = d.expand('${STAGING_DIR_NATIVE}${datadir_native}/misc/magic.mgc')
     bb.utils.mkdirhier(pkgwritedir)
-    os.chmod(pkgwritedir, 0755)
+    os.chmod(pkgwritedir, 0o755)
 
     cmd = rpmbuild
     cmd = cmd + " --nodeps --short-circuit --target " + pkgarch + " --buildroot " + pkgd
@@ -727,13 +734,16 @@ python do_package_rpm () {
     d.setVar('BUILDSPEC', cmd + "\n")
     d.setVarFlag('BUILDSPEC', 'func', '1')
     bb.build.exec_func('BUILDSPEC', d)
+
+    if d.getVar('RPM_SIGN_PACKAGES', True) == '1':
+        bb.build.exec_func("sign_rpm", d)
 }
 
 python () {
     if d.getVar('PACKAGES', True) != '':
         deps = ' rpm-native:do_populate_sysroot virtual/fakeroot-native:do_populate_sysroot'
         d.appendVarFlag('do_package_write_rpm', 'depends', deps)
-        d.setVarFlag('do_package_write_rpm', 'fakeroot', 1)
+        d.setVarFlag('do_package_write_rpm', 'fakeroot', '1')
 }
 
 SSTATETASKS += "do_package_write_rpm"

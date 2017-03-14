@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright (C) 2013 Intel Corporation
 #
 # Released under the MIT license (see COPYING.MIT)
@@ -31,12 +32,18 @@ class SSHProcess(object):
         self.starttime = None
         self.logfile = None
 
+        # Unset DISPLAY which means we won't trigger SSH_ASKPASS
+        env = os.environ.copy()
+        if "DISPLAY" in env:
+            del env['DISPLAY']
+        self.options['env'] = env
+
     def log(self, msg):
         if self.logfile:
             with open(self.logfile, "a") as f:
                f.write("%s" % msg)
 
-    def run(self, command, timeout=None, logfile=None):
+    def _run(self, command, timeout=None, logfile=None):
         self.logfile = logfile
         self.starttime = time.time()
         output = ''
@@ -45,16 +52,19 @@ class SSHProcess(object):
             endtime = self.starttime + timeout
             eof = False
             while time.time() < endtime and not eof:
-                if select.select([self.process.stdout], [], [], 5)[0] != []:
-                    data = os.read(self.process.stdout.fileno(), 1024)
-                    if not data:
-                        self.process.stdout.close()
-                        eof = True
-                    else:
-                        output += data
-                        self.log(data)
-                        endtime = time.time() + timeout
-
+                try:
+                    if select.select([self.process.stdout], [], [], 5)[0] != []:
+                        data = os.read(self.process.stdout.fileno(), 1024)
+                        if not data:
+                            self.process.stdout.close()
+                            eof = True
+                        else:
+                            data = data.decode("utf-8")
+                            output += data
+                            self.log(data)
+                            endtime = time.time() + timeout
+                except InterruptedError:
+                    continue
 
             # process hasn't returned yet
             if not eof:
@@ -73,8 +83,18 @@ class SSHProcess(object):
 
         self.status = self.process.wait()
         self.output = output.rstrip()
-        return (self.status, self.output)
 
+    def run(self, command, timeout=None, logfile=None):
+        try:
+            self._run(command, timeout, logfile)
+        except:
+            # Need to guard against a SystemExit or other exception occuring whilst running
+            # and ensure we don't leave a process behind.
+            if self.process.poll() is None:
+                self.process.kill()
+                self.status = self.process.wait()
+            raise
+        return (self.status, self.output)
 
 class SSHControl(object):
     def __init__(self, ip, logfile=None, timeout=300, user='root', port=None):
@@ -120,8 +140,7 @@ class SSHControl(object):
         timeout=0 - no timeout, let command run until it returns
         """
 
-        # We need to source /etc/profile for a proper PATH on the target
-        command = self.ssh + [self.ip, ' . /etc/profile; ' + command]
+        command = self.ssh + [self.ip, 'export PATH=/usr/sbin:/sbin:/usr/bin:/bin; ' + command]
 
         if timeout is None:
             return self._internal_run(command, self.defaulttimeout, self.ignore_status)
@@ -130,9 +149,97 @@ class SSHControl(object):
         return self._internal_run(command, timeout, self.ignore_status)
 
     def copy_to(self, localpath, remotepath):
-        command = self.scp + [localpath, '%s@%s:%s' % (self.user, self.ip, remotepath)]
-        return self._internal_run(command, ignore_status=False)
+        if os.path.islink(localpath):
+            link = os.readlink(localpath)
+            dst_dir, dst_base = os.path.split(remotepath)
+            return self.run("cd %s; ln -s %s %s" % (dst_dir, link, dst_base))
+        else:
+            command = self.scp + [localpath, '%s@%s:%s' % (self.user, self.ip, remotepath)]
+            return self._internal_run(command, ignore_status=False)
 
     def copy_from(self, remotepath, localpath):
         command = self.scp + ['%s@%s:%s' % (self.user, self.ip, remotepath), localpath]
         return self._internal_run(command, ignore_status=False)
+
+    def copy_dir_to(self, localpath, remotepath):
+        """
+        Copy recursively localpath directory to remotepath in target.
+        """
+
+        for root, dirs, files in os.walk(localpath):
+            # Create directories in the target as needed
+            for d in dirs:
+                tmp_dir = os.path.join(root, d).replace(localpath, "")
+                new_dir = os.path.join(remotepath, tmp_dir.lstrip("/"))
+                cmd = "mkdir -p %s" % new_dir
+                self.run(cmd)
+
+            # Copy files into the target
+            for f in files:
+                tmp_file = os.path.join(root, f).replace(localpath, "")
+                dst_file = os.path.join(remotepath, tmp_file.lstrip("/"))
+                src_file = os.path.join(root, f)
+                self.copy_to(src_file, dst_file)
+
+
+    def delete_files(self, remotepath, files):
+        """
+        Delete files in target's remote path.
+        """
+
+        cmd = "rm"
+        if not isinstance(files, list):
+            files = [files]
+
+        for f in files:
+            cmd = "%s %s" % (cmd, os.path.join(remotepath, f))
+
+        self.run(cmd)
+
+
+    def delete_dir(self, remotepath):
+        """
+        Delete remotepath directory in target.
+        """
+
+        cmd = "rmdir %s" % remotepath
+        self.run(cmd)
+
+
+    def delete_dir_structure(self, localpath, remotepath):
+        """
+        Delete recursively localpath structure directory in target's remotepath.
+
+        This function is very usefult to delete a package that is installed in
+        the DUT and the host running the test has such package extracted in tmp
+        directory.
+
+        Example:
+            pwd: /home/user/tmp
+            tree:   .
+                    └── work
+                        ├── dir1
+                        │   └── file1
+                        └── dir2
+
+            localpath = "/home/user/tmp" and remotepath = "/home/user"
+
+            With the above variables this function will try to delete the
+            directory in the DUT in this order:
+                /home/user/work/dir1/file1
+                /home/user/work/dir1        (if dir is empty)
+                /home/user/work/dir2        (if dir is empty)
+                /home/user/work             (if dir is empty)
+        """
+
+        for root, dirs, files in os.walk(localpath, topdown=False):
+            # Delete files first
+            tmpdir = os.path.join(root).replace(localpath, "")
+            remotedir = os.path.join(remotepath, tmpdir.lstrip("/"))
+            self.delete_files(remotedir, files)
+
+            # Remove dirs if empty
+            for d in dirs:
+                tmpdir = os.path.join(root, d).replace(localpath, "")
+                remotedir = os.path.join(remotepath, tmpdir.lstrip("/"))
+                self.delete_dir(remotepath)

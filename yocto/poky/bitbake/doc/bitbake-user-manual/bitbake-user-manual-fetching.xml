@@ -325,6 +325,25 @@
      SRC_URI = "ftp://you@oe.handhelds.org/home/you/secret.plan"
                 </literallayout>
             </para>
+            <note>
+               Because URL parameters are delimited by semi-colons, this can
+               introduce ambiguity when parsing URLs that also contain semi-colons,
+               for example:
+                <literallayout class='monospaced'>
+     SRC_URI = "http://abc123.org/git/?p=gcc/gcc.git;a=snapshot;h=a5dd47"
+                </literallayout>
+               Such URLs should should be modified by replacing semi-colons with '&amp;' characters:
+               <literallayout class='monospaced'>
+     SRC_URI = "http://abc123.org/git/?p=gcc/gcc.git&amp;a=snapshot&amp;h=a5dd47"
+                </literallayout>
+                In most cases this should work. Treating semi-colons and '&amp;' in queries
+                identically is recommended by the World Wide Web Consortium (W3C).
+                Note that due to the nature of the URL, you may have to specify the name
+                of the downloaded file as well:
+              <literallayout class='monospaced'>
+     SRC_URI = "http://abc123.org/git/?p=gcc/gcc.git&amp;a=snapshot&amp;h=a5dd47;downloadfilename=myfile.bz2"
+                </literallayout>
+            </note>
         </section>
 
         <section id='cvs-fetcher'>
@@ -628,7 +647,7 @@
                 <literallayout class='monospaced'>
      SRC_URI = "ccrc://cc.example.org/ccrc;vob=/example_vob;module=/example_module"
      SRCREV = "EXAMPLE_CLEARCASE_TAG"
-     PV = "${@d.getVar("SRCREV").replace("/", "+")}"
+     PV = "${@d.getVar("SRCREV", False).replace("/", "+")}"
                 </literallayout>
                 The fetcher uses the <filename>rcleartool</filename> or
                 <filename>cleartool</filename> remote client, depending on
@@ -651,8 +670,8 @@
                             The <filename>module</filename> and <filename>vob</filename>
                             options are combined to create the <filename>load</filename> rule in
                             the view config spec.
-                            As an example, consider the <filename>vob</filename> and 
-                            <filename>module</filename> values from the 
+                            As an example, consider the <filename>vob</filename> and
+                            <filename>module</filename> values from the
                             <filename>SRC_URI</filename> statement at the start of this section.
                             Combining those values results in the following:
                             <literallayout class='monospaced'>
@@ -697,6 +716,68 @@
             </para>
         </section>
 
+        <section id='perforce-fetcher'>
+            <title>Perforce Fetcher (<filename>p4://</filename>)</title>
+
+            <para>
+                This fetcher submodule fetches code from the
+                <ulink url='https://www.perforce.com/'>Perforce</ulink>
+                source control system.
+                The executable used is specified by
+                <filename>FETCHCMD_p4</filename>, which defaults
+                to "p4".
+                The fetcher's temporary working directory is set by
+                <link linkend='var-P4DIR'><filename>P4DIR</filename></link>,
+                which defaults to "DL_DIR/p4".
+            </para>
+
+            <para>
+                To use this fetcher, make sure your recipe has proper
+                <link linkend='var-SRC_URI'><filename>SRC_URI</filename></link>,
+                <link linkend='var-SRCREV'><filename>SRCREV</filename></link>, and
+                <link linkend='var-PV'><filename>PV</filename></link> values.
+                The p4 executable is able to use the config file defined by your
+                system's <filename>P4CONFIG</filename> environment variable in
+                order to define the Perforce server URL and port, username, and
+                password if you do not wish to keep those values in a recipe
+                itself.
+                If you choose not to use <filename>P4CONFIG</filename>,
+                or to explicitly set variables that <filename>P4CONFIG</filename>
+                can contain, you can specify the <filename>P4PORT</filename> value,
+                which is the server's URL and port number, and you can
+                specify a username and password directly in your recipe within
+                <filename>SRC_URI</filename>.
+            </para>
+
+            <para>
+                Here is an example that relies on <filename>P4CONFIG</filename>
+                to specify the server URL and port, username, and password, and
+                fetches the Head Revision:
+                <literallayout class='monospaced'>
+    SRC_URI = "p4://example-depot/main/source/..."
+    SRCREV = "${AUTOREV}"
+    PV = "p4-${SRCPV}"
+    S = "${WORKDIR}/p4"
+                </literallayout>
+            </para>
+
+            <para>
+                Here is an example that specifies the server URL and port,
+                username, and password, and fetches a Revision based on a Label:
+                <literallayout class='monospaced'>
+    P4PORT = "tcp:p4server.example.net:1666"
+    SRC_URI = "p4://user:passwd@example-depot/main/source/..."
+    SRCREV = "release-1.0"
+    PV = "p4-${SRCPV}"
+    S = "${WORKDIR}/p4"
+                </literallayout>
+                <note>
+                    You should always set <filename>S</filename>
+                    to <filename>"${WORKDIR}/p4"</filename> in your recipe.
+                </note>
+            </para>
+        </section>
+
         <section id='other-fetchers'>
             <title>Other Fetchers</title>
 
@@ -705,9 +786,6 @@
                 <itemizedlist>
                     <listitem><para>
                         Bazaar (<filename>bzr://</filename>)
-                        </para></listitem>
-                    <listitem><para>
-                        Perforce (<filename>p4://</filename>)
                         </para></listitem>
                     <listitem><para>
                         Trees using Git Annex (<filename>gitannex://</filename>)

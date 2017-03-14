@@ -15,35 +15,26 @@
 # with this program; if not, write to the Free Software Foundation, Inc., 59
 # Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 
+__all__ = ['ImagerPlugin', 'SourcePlugin', 'get_plugins']
+
+import sys
+from collections import defaultdict
+
 from wic import msger
-from wic.utils import errors
 
-class _Plugin(object):
-    class __metaclass__(type):
-        def __init__(cls, name, bases, attrs):
-            if not hasattr(cls, 'plugins'):
-                cls.plugins = {}
+class PluginMeta(type):
+    plugins = defaultdict(dict)
+    def __new__(cls, name, bases, attrs):
+        class_type = type.__new__(cls, name, bases, attrs)
+        if 'name' in attrs:
+            cls.plugins[class_type.wic_plugin_type][attrs['name']] = class_type
 
-            elif 'wic_plugin_type' in attrs:
-                if attrs['wic_plugin_type'] not in cls.plugins:
-                    cls.plugins[attrs['wic_plugin_type']] = {}
+        return class_type
 
-            elif hasattr(cls, 'wic_plugin_type') and 'name' in attrs:
-                cls.plugins[cls.wic_plugin_type][attrs['name']] = cls
-
-        def show_plugins(cls):
-            for cls in cls.plugins[cls.wic_plugin_type]:
-                print cls
-
-        def get_plugins(cls):
-            return cls.plugins
-
-
-class ImagerPlugin(_Plugin):
+class ImagerPlugin(PluginMeta("Plugin", (), {})):
     wic_plugin_type = "imager"
 
-
-class SourcePlugin(_Plugin):
+class SourcePlugin(PluginMeta("Plugin", (), {})):
     wic_plugin_type = "source"
     """
     The methods that can be implemented by --source plugins.
@@ -52,7 +43,7 @@ class SourcePlugin(_Plugin):
     """
 
     @classmethod
-    def do_install_disk(self, disk, disk_name, cr, workdir, oe_builddir,
+    def do_install_disk(cls, disk, disk_name, creator, workdir, oe_builddir,
                         bootimg_dir, kernel_dir, native_sysroot):
         """
         Called after all partitions have been prepared and assembled into a
@@ -62,7 +53,7 @@ class SourcePlugin(_Plugin):
         msger.debug("SourcePlugin: do_install_disk: disk: %s" % disk_name)
 
     @classmethod
-    def do_stage_partition(self, part, source_params, cr, cr_workdir,
+    def do_stage_partition(cls, part, source_params, creator, cr_workdir,
                            oe_builddir, bootimg_dir, kernel_dir,
                            native_sysroot):
         """
@@ -79,7 +70,7 @@ class SourcePlugin(_Plugin):
         msger.debug("SourcePlugin: do_stage_partition: part: %s" % part)
 
     @classmethod
-    def do_configure_partition(self, part, source_params, cr, cr_workdir,
+    def do_configure_partition(cls, part, source_params, creator, cr_workdir,
                                oe_builddir, bootimg_dir, kernel_dir,
                                native_sysroot):
         """
@@ -90,7 +81,7 @@ class SourcePlugin(_Plugin):
         msger.debug("SourcePlugin: do_configure_partition: part: %s" % part)
 
     @classmethod
-    def do_prepare_partition(self, part, source_params, cr, cr_workdir,
+    def do_prepare_partition(cls, part, source_params, creator, cr_workdir,
                              oe_builddir, bootimg_dir, kernel_dir, rootfs_dir,
                              native_sysroot):
         """
@@ -100,10 +91,4 @@ class SourcePlugin(_Plugin):
         msger.debug("SourcePlugin: do_prepare_partition: part: %s" % part)
 
 def get_plugins(typen):
-    ps = ImagerPlugin.get_plugins()
-    if typen in ps:
-        return ps[typen]
-    else:
-        return None
-
-__all__ = ['ImagerPlugin', 'SourcePlugin', 'get_plugins']
+    return PluginMeta.plugins.get(typen)

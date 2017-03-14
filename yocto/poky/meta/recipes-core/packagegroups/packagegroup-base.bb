@@ -1,5 +1,4 @@
 SUMMARY = "Merge machine and distro options to create a basic machine task/package"
-LICENSE = "MIT"
 PR = "r83"
 
 #
@@ -292,7 +291,7 @@ RRECOMMENDS_packagegroup-base-ipsec = "\
 #
 SUMMARY_packagegroup-base-wifi = "WiFi support"
 RDEPENDS_packagegroup-base-wifi = "\
-    wireless-tools \
+    ${VIRTUAL-RUNTIME_wireless-tools} \
     ${@bb.utils.contains('COMBINED_FEATURES', 'pcmcia', 'hostap-utils', '',d)} \
     ${@bb.utils.contains('COMBINED_FEATURES', 'pci', 'hostap-utils', '',d)} \
     wpa-supplicant"

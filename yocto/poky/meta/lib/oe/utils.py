@@ -23,13 +23,13 @@ def ifelse(condition, iftrue = True, iffalse = False):
         return iffalse
 
 def conditional(variable, checkvalue, truevalue, falsevalue, d):
-    if d.getVar(variable,1) == checkvalue:
+    if d.getVar(variable, True) == checkvalue:
         return truevalue
     else:
         return falsevalue
 
 def less_or_equal(variable, checkvalue, truevalue, falsevalue, d):
-    if float(d.getVar(variable,1)) <= float(checkvalue):
+    if float(d.getVar(variable, True)) <= float(checkvalue):
         return truevalue
     else:
         return falsevalue
@@ -46,7 +46,7 @@ def both_contain(variable1, variable2, checkvalue, d):
     val2 = d.getVar(variable2, True)
     val1 = set(val1.split())
     val2 = set(val2.split())
-    if isinstance(checkvalue, basestring):
+    if isinstance(checkvalue, str):
         checkvalue = set(checkvalue.split())
     else:
         checkvalue = set(checkvalue)
@@ -85,11 +85,11 @@ def prune_suffix(var, suffixes, d):
 
 def str_filter(f, str, d):
     from re import match
-    return " ".join(filter(lambda x: match(f, x, 0), str.split()))
+    return " ".join([x for x in str.split() if match(f, x, 0)])
 
 def str_filter_out(f, str, d):
     from re import match
-    return " ".join(filter(lambda x: not match(f, x, 0), str.split()))
+    return " ".join([x for x in str.split() if not match(f, x, 0)])
 
 def param_bool(cfg, field, dflt = None):
     """Lookup <field> in <cfg> map and convert it to a boolean; take
@@ -134,7 +134,7 @@ def packages_filter_out_system(d):
     PN-dbg PN-doc PN-locale-eb-gb removed.
     """
     pn = d.getVar('PN', True)
-    blacklist = map(lambda suffix: pn + suffix, ('', '-dbg', '-dev', '-doc', '-locale', '-staticdev'))
+    blacklist = [pn + suffix for suffix in ('', '-dbg', '-dev', '-doc', '-locale', '-staticdev')]
     localepkg = pn + "-locale-"
     pkgs = []
 
@@ -208,37 +208,100 @@ def squashspaces(string):
     import re
     return re.sub("\s+", " ", string).strip()
 
+def format_pkg_list(pkg_dict, ret_format=None):
+    output = []
+
+    if ret_format == "arch":
+        for pkg in sorted(pkg_dict):
+            output.append("%s %s" % (pkg, pkg_dict[pkg]["arch"]))
+    elif ret_format == "file":
+        for pkg in sorted(pkg_dict):
+            output.append("%s %s %s" % (pkg, pkg_dict[pkg]["filename"], pkg_dict[pkg]["arch"]))
+    elif ret_format == "ver":
+        for pkg in sorted(pkg_dict):
+            output.append("%s %s %s" % (pkg, pkg_dict[pkg]["arch"], pkg_dict[pkg]["ver"]))
+    elif ret_format == "deps":
+        for pkg in sorted(pkg_dict):
+            for dep in pkg_dict[pkg]["deps"]:
+                output.append("%s|%s" % (pkg, dep))
+    else:
+        for pkg in sorted(pkg_dict):
+            output.append(pkg)
+
+    return '\n'.join(output)
+
+def host_gcc_version(d):
+    import re, subprocess
+
+    compiler = d.getVar("BUILD_CC", True)
+
+    try:
+        env = os.environ.copy()
+        env["PATH"] = d.getVar("PATH", True)
+        output = subprocess.check_output("%s --version" % compiler, shell=True, env=env).decode("utf-8")
+    except subprocess.CalledProcessError as e:
+        bb.fatal("Error running %s --version: %s" % (compiler, e.output.decode("utf-8")))
+
+    match = re.match(".* (\d\.\d)\.\d.*", output.split('\n')[0])
+    if not match:
+        bb.fatal("Can't get compiler version from %s --version output" % compiler)
+
+    version = match.group(1)
+    return "-%s" % version if version in ("4.8", "4.9") else ""
+
 #
 # Python 2.7 doesn't have threaded pools (just multiprocessing)
 # so implement a version here
 #
 
-from Queue import Queue
+from queue import Queue
 from threading import Thread
 
 class ThreadedWorker(Thread):
     """Thread executing tasks from a given tasks queue"""
-    def __init__(self, tasks):
+    def __init__(self, tasks, worker_init, worker_end):
         Thread.__init__(self)
         self.tasks = tasks
         self.daemon = True
-        self.start()
+
+        self.worker_init = worker_init
+        self.worker_end = worker_end
 
     def run(self):
+        from queue import Empty
+
+        if self.worker_init is not None:
+            self.worker_init(self)
+
         while True:
-            func, args, kargs = self.tasks.get()
             try:
-                func(*args, **kargs)
-            except Exception, e:
-                print e
+                func, args, kargs = self.tasks.get(block=False)
+            except Empty:
+                if self.worker_end is not None:
+                    self.worker_end(self)
+                break
+
+            try:
+                func(self, *args, **kargs)
+            except Exception as e:
+                print(e)
             finally:
                 self.tasks.task_done()
 
 class ThreadedPool:
     """Pool of threads consuming tasks from a queue"""
-    def __init__(self, num_threads):
-        self.tasks = Queue(num_threads)
-        for _ in range(num_threads): ThreadedWorker(self.tasks)
+    def __init__(self, num_workers, num_tasks, worker_init=None,
+            worker_end=None):
+        self.tasks = Queue(num_tasks)
+        self.workers = []
+
+        for _ in range(num_workers):
+            worker = ThreadedWorker(self.tasks, worker_init, worker_end)
+            self.workers.append(worker)
+
+    def start(self):
+        for worker in self.workers:
+            worker.start()
 
     def add_task(self, func, *args, **kargs):
         """Add a task to the queue"""
@@ -247,4 +310,29 @@ class ThreadedPool:
     def wait_completion(self):
         """Wait for completion of all the tasks in the queue"""
         self.tasks.join()
+        for worker in self.workers:
+            worker.join()
 
+def write_ld_so_conf(d):
+    # Some utils like prelink may not have the correct target library paths
+    # so write an ld.so.conf to help them
+    ldsoconf = d.expand("${STAGING_DIR_TARGET}${sysconfdir}/ld.so.conf")
+    if os.path.exists(ldsoconf):
+        bb.utils.remove(ldsoconf)
+    bb.utils.mkdirhier(os.path.dirname(ldsoconf))
+    with open(ldsoconf, "w") as f:
+        f.write(d.getVar("base_libdir", True) + '\n')
+        f.write(d.getVar("libdir", True) + '\n')
+
+class ImageQAFailed(bb.build.FuncFailed):
+    def __init__(self, description, name=None, logfile=None):
+        self.description = description
+        self.name = name
+        self.logfile=logfile
+
+    def __str__(self):
+        msg = 'Function failed: %s' % self.name
+        if self.description:
+            msg = msg + ' (%s)' % self.description
+
+        return msg

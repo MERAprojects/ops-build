@@ -57,10 +57,11 @@ BASE_CPIO_FS_FILE = $(BUILDDIR)/tmp/deploy/images/$(CONFIGURED_PLATFORM)/$(DISTR
 BASE_TAR_FS_FILE = $(BUILDDIR)/tmp/deploy/images/$(CONFIGURED_PLATFORM)/$(DISTRO_FS_TARGET)-$(CONFIGURED_PLATFORM).tar
 BASE_TAR_DBG_FS_FILE = $(BUILDDIR)/tmp/deploy/images/$(CONFIGURED_PLATFORM)/$(DISTRO_FS_TARGET)-$(CONFIGURED_PLATFORM).dbg.tar
 BASE_TARGZ_FS_FILE = $(BUILDDIR)/tmp/deploy/images/$(CONFIGURED_PLATFORM)/$(DISTRO_FS_TARGET)-$(CONFIGURED_PLATFORM).tar.gz
-BASE_TARGZ_DBG_FS_FILE = $(BUILDDIR)/tmp/deploy/images/$(CONFIGURED_PLATFORM)/$(DISTRO_FS_TARGET)-$(CONFIGURED_PLATFORM).dbg.tar.gz
+BASE_TARGZ_DBG_FS_FILE = $(BUILDDIR)/tmp/deploy/images/$(CONFIGURED_PLATFORM)/$(DISTRO_FS_TARGET)-$(CONFIGURED_PLATFORM)-dbg.tar.gz
 BASE_HDDIMG_FS_FILE = $(BUILDDIR)/tmp/deploy/images/$(CONFIGURED_PLATFORM)/$(DISTRO_FS_TARGET)-$(CONFIGURED_PLATFORM).hddimg
 BASE_OVA_FILE = $(BUILDDIR)/tmp/deploy/images/$(CONFIGURED_PLATFORM)/$(DISTRO_FS_TARGET)-$(CONFIGURED_PLATFORM).ova
 BASE_BOX_FILE = $(BUILDDIR)/tmp/deploy/images/$(CONFIGURED_PLATFORM)/$(DISTRO_FS_TARGET)-$(CONFIGURED_PLATFORM).box
+BASE_QCOW2_FILE = $(BUILDDIR)/tmp/deploy/images/$(CONFIGURED_PLATFORM)/$(DISTRO_FS_TARGET)-$(CONFIGURED_PLATFORM).qcow2
 BASE_ONIE_INSTALLER_FILE = $(BUILDDIR)/tmp/deploy/images/$(CONFIGURED_PLATFORM)/$(ONIE_INSTALLER_FILE)
 BASE_DOCKER_IMAGE = openswitch/${CONFIGURED_PLATFORM}
 HOST_INTERPRETER := $(shell readelf -a /bin/sh | grep interpreter | awk '{ print substr($$4, 0, length($$4)-1)}')
@@ -174,7 +175,10 @@ build/conf/local.conf: .platform
       fi \
     fi
 
-header:: build/conf/site.conf build/conf/local.conf
+build/conf/templateconf.cfg:
+	$(V)echo "meta-poky/conf" > $@
+
+header:: build/conf/site.conf build/conf/local.conf build/conf/templateconf.cfg
 
 -include yocto/*/meta-platform-$(DISTRO)-$(CONFIGURED_PLATFORM)/Rules.make
 export PLATFORM_DTS_FILE
@@ -184,6 +188,9 @@ HOST_ARCH:=$(shell uname -m)
 
 .PHONY: kernel _kernel _kernel_links kernelconfig
 kernel: header _kernel
+
+kernelconfig: header
+	$(V)$(call BITBAKE,virtual/kernel -c menuconfig)
 
 _KERNEL_TARGET ?= _kernel
 
@@ -199,7 +206,7 @@ KERNEL_BUILD_DIR=$(BUILDDIR)/tmp/work/$(CONFIGURED_MACHINE)*/$(KERNEL_PROVIDER)/
 _kernel_links:
 	$(V)if test -f $(DISTRO_KERNEL_FILE) ; then ln -sf $(DISTRO_KERNEL_FILE) images/kernel-$(CONFIGURED_PLATFORM).bin ; fi
 	$(V)if test -f $(DISTRO_KERNEL_SYMBOLS_FILE) ; then ln -sf $(DISTRO_KERNEL_SYMBOLS_FILE) images/kernel-$(CONFIGURED_PLATFORM).elf ; fi
-	$(V)if [ -d `eval echo "$(KERNEL_BUILD_DIR)"` ] ; then ln -sf $(KERNEL_BUILD_DIR) images/kernel-src ; fi
+	$(V)if [ -d "$(KERNEL_BUILD_DIR)" ] ; then ln -sf $(KERNEL_BUILD_DIR) images/kernel-src ; fi
 
 $(DISTRO_KERNEL_FILE) images/kernel-$(CONFIGURED_PLATFORM).bin:
 	$(V) $(MAKE) $(_KERNEL_TARGET)
@@ -546,7 +553,7 @@ ifeq (devenv_import,$(firstword $(MAKECMDGOALS)))
   endif
 endif
 devenv_import:
-	$(V) grep  -q $(PACKAGE) .devenv 2>/dev/null || $(call DEVTOOL, modify $(PACKAGE) $(IMPORTED_SRC)) && \
+	$(V) grep  -q $(PACKAGE) .devenv 2>/dev/null || $(call DEVTOOL, modify --no-extract $(PACKAGE) $(IMPORTED_SRC)) && \
 	mkdir -p $(BUILD_ROOT)/src && \
 	sed -e "s/##RECIPE##/$(PACKAGE)/g" $(BUILD_ROOT)/tools/devenv-recipe-template.make >> $(BUILD_ROOT)/src/Rules.make && \
 	echo $(PACKAGE) >> $(BUILD_ROOT)/.devenv

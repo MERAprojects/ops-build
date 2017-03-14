@@ -24,8 +24,9 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
-import re, os
-import logging
+import errno
+import re
+import os
 import bb.utils
 from bb.parse import ParseError, resolve_file, ast, logger, handle
 
@@ -56,9 +57,11 @@ __config_regexp__  = re.compile( r"""
 __include_regexp__ = re.compile( r"include\s+(.+)" )
 __require_regexp__ = re.compile( r"require\s+(.+)" )
 __export_regexp__ = re.compile( r"export\s+([a-zA-Z0-9\-_+.${}/]+)$" )
+__unset_regexp__ = re.compile( r"unset\s+([a-zA-Z0-9\-_+.${}/]+)$" )
+__unset_flag_regexp__ = re.compile( r"unset\s+([a-zA-Z0-9\-_+.${}/]+)\[([a-zA-Z0-9\-_+.${}/]+)\]$" )
 
 def init(data):
-    topdir = data.getVar('TOPDIR')
+    topdir = data.getVar('TOPDIR', False)
     if not topdir:
         data.setVar('TOPDIR', os.getcwd())
 
@@ -83,20 +86,26 @@ def include(parentfn, fn, lineno, data, error_out):
         bbpath = "%s:%s" % (dname, data.getVar("BBPATH", True))
         abs_fn, attempts = bb.utils.which(bbpath, fn, history=True)
         if abs_fn and bb.parse.check_dependency(data, abs_fn):
-            logger.warn("Duplicate inclusion for %s in %s" % (abs_fn, data.getVar('FILE', True)))
+            logger.warning("Duplicate inclusion for %s in %s" % (abs_fn, data.getVar('FILE', True)))
         for af in attempts:
             bb.parse.mark_dependency(data, af)
         if abs_fn:
             fn = abs_fn
     elif bb.parse.check_dependency(data, fn):
-        logger.warn("Duplicate inclusion for %s in %s" % (fn, data.getVar('FILE', True)))
+        logger.warning("Duplicate inclusion for %s in %s" % (fn, data.getVar('FILE', True)))
 
     try:
-        ret = bb.parse.handle(fn, data, True)
-    except (IOError, OSError):
-        if error_out:
-            raise ParseError("Could not %(error_out)s file %(fn)s" % vars(), parentfn, lineno)
-        logger.debug(2, "CONF file '%s' not found", fn)
+        bb.parse.handle(fn, data, True)
+    except (IOError, OSError) as exc:
+        if exc.errno == errno.ENOENT:
+            if error_out:
+                raise ParseError("Could not %s file %s" % (error_out, fn), parentfn, lineno)
+            logger.debug(2, "CONF file '%s' not found", fn)
+        else:
+            if error_out:
+                raise ParseError("Could not %s file %s: %s" % (error_out, fn, exc.strerror), parentfn, lineno)
+            else:
+                raise ParseError("Error parsing %s: %s" % (fn, exc.strerror), parentfn, lineno)
 
 # We have an issue where a UI might want to enforce particular settings such as
 # an empty DISTRO variable. If configuration files do something like assigning
@@ -112,7 +121,7 @@ def handle(fn, data, include):
     if include == 0:
         oldfile = None
     else:
-        oldfile = data.getVar('FILE')
+        oldfile = data.getVar('FILE', False)
 
     abs_fn = resolve_file(fn, data)
     f = open(abs_fn, 'r')
@@ -176,6 +185,16 @@ def feeder(lineno, s, fn, statements):
     m = __export_regexp__.match(s)
     if m:
         ast.handleExport(statements, fn, lineno, m)
+        return
+
+    m = __unset_regexp__.match(s)
+    if m:
+        ast.handleUnset(statements, fn, lineno, m)
+        return
+
+    m = __unset_flag_regexp__.match(s)
+    if m:
+        ast.handleUnsetFlag(statements, fn, lineno, m)
         return
 
     raise ParseError("unparsed line: '%s'" % s, fn, lineno);

@@ -10,7 +10,6 @@ LICENSE = "LGPL2.1"
 DEPENDS = "sqlite3 attr"
 
 FILES_${PN} = "${prefix}/lib/pseudo/lib*/libpseudo.so ${bindir}/* ${localstatedir}/pseudo ${prefix}/var/pseudo"
-FILES_${PN}-dbg += "${prefix}/lib/pseudo/lib*/.debug"
 INSANE_SKIP_${PN} += "libdir"
 INSANE_SKIP_${PN}-dbg += "libdir"
 
@@ -27,6 +26,8 @@ do_configure () {
 NO32LIBS ??= "1"
 NO32LIBS_class-nativesdk = "1"
 
+PSEUDO_EXTRA_OPTS ?= "--enable-force-async --without-passwd-fallback"
+
 # Compile for the local machine arch...
 do_compile () {
 	if [ "${SITEINFO_BITS}" = "64" ]; then
@@ -36,6 +37,7 @@ do_compile () {
 	fi
 	oe_runmake ${MAKEOPTS}
 }
+do_compile[vardepsexclude] = "SITEINFO_BITS"
 
 maybe_make32() {
 	# We probably don't need to build 32-bit binaries.
@@ -64,6 +66,7 @@ maybe_make32() {
 		bbnote "If you need to run 32-bit executables, ensure that NO32LIBS is set to 0."
 	fi
 }
+maybe_make32[vardepsexclude] = "SITEINFO_BITS"
 
 warn_32bit_missing() {
 	bbwarn "Can't find stubs-32.h, but usually need it to build 32-bit libpseudo."
@@ -111,10 +114,15 @@ do_install () {
 	oe_runmake 'DESTDIR=${D}' ${MAKEOPTS} 'LIB=lib/pseudo/lib$(MARK64)' install
 }
 
-# Two below are the same
-# If necessary install for the alternative machine arch.  This is only 
-# necessary in a native build.
 do_install_append_class-native () {
+	install -d ${D}${sysconfdir}
+	# The fallback files should never be modified
+	install -m 444 ${WORKDIR}/fallback-passwd ${D}${sysconfdir}/passwd
+	install -m 444 ${WORKDIR}/fallback-group ${D}${sysconfdir}/group
+
+	# Two native/nativesdk entries below are the same
+	# If necessary install for the alternative machine arch.  This is only
+	# necessary in a native build.
 	maybe_make32
 	if $make32; then
 		mkdir -p ${D}${prefix}/lib/pseudo/lib
@@ -128,6 +136,7 @@ do_install_append_class-nativesdk () {
 		mkdir -p ${D}${prefix}/lib/pseudo/lib
 		cp lib/pseudo/lib/libpseudo.so ${D}${prefix}/lib/pseudo/lib/.
 	fi
+	chrpath -d ${D}${prefix}/lib/pseudo/lib*/libpseudo.so
 }
 
 BBCLASSEXTEND = "native nativesdk"

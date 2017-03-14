@@ -2,7 +2,7 @@ SUMMARY = "Utilities for manipulating filesystem extended attributes"
 HOMEPAGE = "http://savannah.nongnu.org/projects/attr/"
 SECTION = "libs"
 
-DEPENDS = "ncurses virtual/libintl"
+DEPENDS = "virtual/libintl"
 
 LICENSE = "LGPLv2.1+ & GPLv2+"
 LICENSE_${PN} = "GPLv2+"
@@ -26,7 +26,7 @@ do_install_append() {
 inherit ptest
 
 do_install_ptest() {
-	tar -cf - test/ --exclude ext | ( cd ${D}${PTEST_PATH} && tar -xf - )
+	tar -c --exclude=ext test/ | ( cd ${D}${PTEST_PATH} && tar -xf - )
 	mkdir ${D}${PTEST_PATH}/include
 	for i in builddefs buildmacros buildrules; \
 	  do cp ${S}/include/$i ${D}${PTEST_PATH}/include/; \
@@ -34,6 +34,6 @@ do_install_ptest() {
 	sed -e 's|; @echo|; echo|' -i ${D}${PTEST_PATH}/test/Makefile
 }
 
-RDEPENDS_${PN}-ptest = "coreutils perl-module-filehandle perl-module-getopt-std perl-module-posix"
+RDEPENDS_${PN}-ptest = "attr coreutils perl-module-filehandle perl-module-getopt-std perl-module-posix"
 
 BBCLASSEXTEND = "native nativesdk"

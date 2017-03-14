@@ -10,17 +10,17 @@ import subprocess
 import re
 
 
-class Rootfs(object):
+class Rootfs(object, metaclass=ABCMeta):
     """
     This is an abstract class. Do not instantiate this directly.
     """
-    __metaclass__ = ABCMeta
 
-    def __init__(self, d):
+    def __init__(self, d, progress_reporter=None):
         self.d = d
         self.pm = None
         self.image_rootfs = self.d.getVar('IMAGE_ROOTFS', True)
-        self.deploy_dir_image = self.d.getVar('DEPLOY_DIR_IMAGE', True)
+        self.deploydir = self.d.getVar('IMGDEPLOYDIR', True)
+        self.progress_reporter = progress_reporter
 
         self.install_order = Manifest.INSTALL_ORDER
 
@@ -40,42 +40,46 @@ class Rootfs(object):
     def _log_check(self):
         pass
 
-    def _log_check_warn(self):
-        r = re.compile('^(warn|Warn|NOTE: warn|NOTE: Warn|WARNING:)')
+    def _log_check_common(self, type, match):
+        # Ignore any lines containing log_check to avoid recursion, and ignore
+        # lines beginning with a + since sh -x may emit code which isn't
+        # actually executed, but may contain error messages
+        excludes = [ 'log_check', r'^\+' ]
+        if hasattr(self, 'log_check_expected_regexes'):
+            excludes.extend(self.log_check_expected_regexes)
+        excludes = [re.compile(x) for x in excludes]
+        r = re.compile(match)
         log_path = self.d.expand("${T}/log.do_rootfs")
+        messages = []
         with open(log_path, 'r') as log:
-            for line in log.read().split('\n'):
-                if 'log_check' in line or 'NOTE:' in line:
+            for line in log:
+                for ee in excludes:
+                    m = ee.search(line)
+                    if m:
+                        break
+                if m:
                     continue
 
                 m = r.search(line)
                 if m:
-                    bb.warn('log_check: There is a warn message in the logfile')
-                    bb.warn('log_check: Matched keyword: [%s]' % m.group())
-                    bb.warn('log_check: %s\n' % line)
+                    messages.append('[log_check] %s' % line)
+        if messages:
+            if len(messages) == 1:
+                msg = '1 %s message' % type
+            else:
+                msg = '%d %s messages' % (len(messages), type)
+            msg = '[log_check] %s: found %s in the logfile:\n%s' % \
+                (self.d.getVar('PN', True), msg, ''.join(messages))
+            if type == 'error':
+                bb.fatal(msg)
+            else:
+                bb.warn(msg)
+
+    def _log_check_warn(self):
+        self._log_check_common('warning', '^(warn|Warn|WARNING:)')
 
     def _log_check_error(self):
-        r = re.compile(self.log_check_regex)
-        log_path = self.d.expand("${T}/log.do_rootfs")
-        with open(log_path, 'r') as log:
-            found_error = 0
-            message = "\n"
-            for line in log.read().split('\n'):
-                if 'log_check' in line:
-                    continue
-
-                m = r.search(line)
-                if m:
-                    found_error = 1
-                    bb.warn('log_check: There were error messages in the logfile')
-                    bb.warn('log_check: Matched keyword: [%s]\n\n' % m.group())
-
-                if found_error >= 1 and found_error <= 5:
-                    message += line + '\n'
-                    found_error += 1
-
-                if found_error == 6:
-                    bb.fatal(message)
+        self._log_check_common('error', self.log_check_regex)
 
     def _insert_feed_uris(self):
         if bb.utils.contains("IMAGE_FEATURES", "package-management",
@@ -112,8 +116,10 @@ class Rootfs(object):
 
         bb.note("  Copying back package database...")
         for dir in dirs:
+            if not os.path.isdir(self.image_rootfs + '-orig' + dir):
+                continue
             bb.utils.mkdirhier(self.image_rootfs + os.path.dirname(dir))
-            shutil.copytree(self.image_rootfs + '-orig' + dir, self.image_rootfs + dir)
+            shutil.copytree(self.image_rootfs + '-orig' + dir, self.image_rootfs + dir, symlinks=True)
 
         cpath = oe.cachedpath.CachedPath()
         # Copy files located in /usr/lib/debug or /usr/src/debug
@@ -164,7 +170,11 @@ class Rootfs(object):
         bb.note("###### Generate rootfs #######")
         pre_process_cmds = self.d.getVar("ROOTFS_PREPROCESS_COMMAND", True)
         post_process_cmds = self.d.getVar("ROOTFS_POSTPROCESS_COMMAND", True)
+        rootfs_post_install_cmds = self.d.getVar('ROOTFS_POSTINSTALL_COMMAND', True)
 
+        postinst_intercepts_dir = self.d.getVar("POSTINST_INTERCEPTS_DIR", True)
+        if not postinst_intercepts_dir:
+            postinst_intercepts_dir = self.d.expand("${COREBASE}/scripts/postinst-intercepts")
         intercepts_dir = os.path.join(self.d.getVar('WORKDIR', True),
                                       "intercept_scripts")
 
@@ -172,16 +182,18 @@ class Rootfs(object):
 
         bb.utils.mkdirhier(self.image_rootfs)
 
-        bb.utils.mkdirhier(self.deploy_dir_image)
+        bb.utils.mkdirhier(self.deploydir)
 
-        shutil.copytree(self.d.expand("${COREBASE}/scripts/postinst-intercepts"),
-                        intercepts_dir)
+        shutil.copytree(postinst_intercepts_dir, intercepts_dir)
 
         shutil.copy(self.d.expand("${COREBASE}/meta/files/deploydir_readme.txt"),
-                    self.deploy_dir_image +
+                    self.deploydir +
                     "/README_-_DO_NOT_DELETE_FILES_IN_THIS_DIRECTORY.txt")
 
         execute_pre_post_process(self.d, pre_process_cmds)
+
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
 
         # call the package manager dependent create method
         self._create()
@@ -191,9 +203,14 @@ class Rootfs(object):
         with open(sysconfdir + "/version", "w+") as ver:
             ver.write(self.d.getVar('BUILDNAME', True) + "\n")
 
+        execute_pre_post_process(self.d, rootfs_post_install_cmds)
+
         self._run_intercepts()
 
         execute_pre_post_process(self.d, post_process_cmds)
+
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
 
         if bb.utils.contains("IMAGE_FEATURES", "read-only-rootfs",
                          True, False, self.d):
@@ -208,6 +225,9 @@ class Rootfs(object):
 
         self._uninstall_unneeded()
 
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
+
         self._insert_feed_uris()
 
         self._run_ldconfig()
@@ -218,6 +238,10 @@ class Rootfs(object):
         self._cleanup()
         self._log_check()
 
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
+
+
     def _uninstall_unneeded(self):
         # Remove unneeded init script symlinks
         delayed_postinsts = self._get_delayed_postinsts()
@@ -227,36 +251,30 @@ class Rootfs(object):
                                       self.d.getVar('IMAGE_ROOTFS', True),
                                       "run-postinsts", "remove"])
 
-        runtime_pkgmanage = bb.utils.contains("IMAGE_FEATURES", "package-management",
-                         True, False, self.d)
-        if not runtime_pkgmanage:
-            # Remove components that we don't need if we're not going to install
-            # additional packages at runtime
-            if delayed_postinsts is None:
-                installed_pkgs_dir = self.d.expand('${WORKDIR}/installed_pkgs.txt')
-                pkgs_to_remove = list()
-                with open(installed_pkgs_dir, "r+") as installed_pkgs:
-                    pkgs_installed = installed_pkgs.read().split('\n')
-                    for pkg_installed in pkgs_installed[:]:
-                        pkg = pkg_installed.split()[0]
-                        if pkg in ["update-rc.d",
-                                "update-alternatives",
-                                self.d.getVar("ROOTFS_BOOTSTRAP_INSTALL", True)
-                                ]:
-                            pkgs_to_remove.append(pkg)
-                            pkgs_installed.remove(pkg_installed)
+        image_rorfs = bb.utils.contains("IMAGE_FEATURES", "read-only-rootfs",
+                                        True, False, self.d)
+        image_rorfs_force = self.d.getVar('FORCE_RO_REMOVE', True)
 
-                if len(pkgs_to_remove) > 0:
-                    self.pm.remove(pkgs_to_remove, False)
-                    # Update installed_pkgs.txt
-                    open(installed_pkgs_dir, "w+").write('\n'.join(pkgs_installed))
+        if image_rorfs or image_rorfs_force == "1":
+            # Remove components that we don't need if it's a read-only rootfs
+            unneeded_pkgs = self.d.getVar("ROOTFS_RO_UNNEEDED", True).split()
+            pkgs_installed = image_list_installed_packages(self.d)
+            pkgs_to_remove = [pkg for pkg in pkgs_installed if pkg in unneeded_pkgs]
 
-            else:
-                self._save_postinsts()
+            if len(pkgs_to_remove) > 0:
+                self.pm.remove(pkgs_to_remove, False)
+
+        if delayed_postinsts:
+            self._save_postinsts()
+            if image_rorfs:
+                bb.warn("There are post install scripts "
+                        "in a read-only rootfs")
 
         post_uninstall_cmds = self.d.getVar("ROOTFS_POSTUNINSTALL_COMMAND", True)
         execute_pre_post_process(self.d, post_uninstall_cmds)
 
+        runtime_pkgmanage = bb.utils.contains("IMAGE_FEATURES", "package-management",
+                                              True, False, self.d)
         if not runtime_pkgmanage:
             # Remove the package manager data files
             self.pm.remove_packaging_data()
@@ -267,6 +285,7 @@ class Rootfs(object):
 
         bb.note("Running intercept scripts:")
         os.environ['D'] = self.image_rootfs
+        os.environ['STAGING_DIR_NATIVE'] = self.d.getVar('STAGING_DIR_NATIVE', True)
         for script in os.listdir(intercepts_dir):
             script_full = os.path.join(intercepts_dir, script)
 
@@ -276,7 +295,7 @@ class Rootfs(object):
             bb.note("> Executing %s intercept ..." % script)
 
             try:
-                subprocess.check_output(script_full)
+                subprocess.check_call(script_full)
             except subprocess.CalledProcessError as e:
                 bb.warn("The postinstall intercept hook '%s' failed (exit code: %d)! See log for details!" %
                         (script, e.returncode))
@@ -303,16 +322,30 @@ class Rootfs(object):
             self._exec_shell_cmd(['ldconfig', '-r', self.image_rootfs, '-c',
                                   'new', '-v'])
 
+    def _check_for_kernel_modules(self, modules_dir):
+        for root, dirs, files in os.walk(modules_dir, topdown=True):
+            for name in files:
+                found_ko = name.endswith(".ko")
+                if found_ko:
+                    return found_ko
+        return False
+
     def _generate_kernel_module_deps(self):
+        modules_dir = os.path.join(self.image_rootfs, 'lib', 'modules')
+        # if we don't have any modules don't bother to do the depmod
+        if not self._check_for_kernel_modules(modules_dir):
+            bb.note("No Kernel Modules found, not running depmod")
+            return
+
         kernel_abi_ver_file = oe.path.join(self.d.getVar('PKGDATA_DIR', True), "kernel-depmod",
                                            'kernel-abiversion')
         if not os.path.exists(kernel_abi_ver_file):
             bb.fatal("No kernel-abiversion file found (%s), cannot run depmod, aborting" % kernel_abi_ver_file)
 
         kernel_ver = open(kernel_abi_ver_file).read().strip(' \n')
-        modules_dir = os.path.join(self.image_rootfs, 'lib', 'modules', kernel_ver)
+        versioned_modules_dir = os.path.join(self.image_rootfs, modules_dir, kernel_ver)
 
-        bb.utils.mkdirhier(modules_dir)
+        bb.utils.mkdirhier(versioned_modules_dir)
 
         self._exec_shell_cmd(['depmodwrapper', '-a', '-b', self.image_rootfs, kernel_ver])
 
@@ -342,8 +375,8 @@ class Rootfs(object):
 
 
 class RpmRootfs(Rootfs):
-    def __init__(self, d, manifest_dir):
-        super(RpmRootfs, self).__init__(d)
+    def __init__(self, d, manifest_dir, progress_reporter=None):
+        super(RpmRootfs, self).__init__(d, progress_reporter)
         self.log_check_regex = '(unpacking of archive failed|Cannot find package'\
                                '|exit 1|ERROR: |Error: |Error |ERROR '\
                                '|Failed |Failed: |Failed$|Failed\(\d+\):)'
@@ -393,14 +426,24 @@ class RpmRootfs(Rootfs):
 
     def _create(self):
         pkgs_to_install = self.manifest.parse_initial_manifest()
+        rpm_pre_process_cmds = self.d.getVar('RPM_PREPROCESS_COMMANDS', True)
+        rpm_post_process_cmds = self.d.getVar('RPM_POSTPROCESS_COMMANDS', True)
 
         # update PM index files
         self.pm.write_index()
+
+        execute_pre_post_process(self.d, rpm_pre_process_cmds)
+
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
 
         self.pm.dump_all_available_pkgs()
 
         if self.inc_rpm_image_gen == "1":
             self._create_incremental(pkgs_to_install)
+
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
 
         self.pm.update()
 
@@ -412,18 +455,36 @@ class RpmRootfs(Rootfs):
             else:
                 pkgs += pkgs_to_install[pkg_type]
 
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
+
         self.pm.install(pkgs)
+
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
 
         self.pm.install(pkgs_attempt, True)
 
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
+
         self.pm.install_complementary()
 
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
+
         self._setup_dbg_rootfs(['/etc/rpm', '/var/lib/rpm', '/var/lib/smart'])
+
+        execute_pre_post_process(self.d, rpm_post_process_cmds)
 
         if self.inc_rpm_image_gen == "1":
             self.pm.backup_packaging_data()
 
         self.pm.rpm_setup_smart_target_config()
+
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
+
 
     @staticmethod
     def _depends_list():
@@ -444,32 +505,6 @@ class RpmRootfs(Rootfs):
         # this is just a stub. For RPM, the failed postinstalls are
         # already saved in /etc/rpm-postinsts
         pass
-
-    def _log_check_error(self):
-        r = re.compile('(unpacking of archive failed|Cannot find package|exit 1|ERR|Fail)')
-        log_path = self.d.expand("${T}/log.do_rootfs")
-        with open(log_path, 'r') as log:
-            found_error = 0
-            message = "\n"
-            for line in log.read().split('\n'):
-                if 'log_check' in line:
-                    continue
-                # sh -x may emit code which isn't actually executed
-                if line.startswith('+'):
-		    continue
-
-                m = r.search(line)
-                if m:
-                    found_error = 1
-                    bb.warn('log_check: There were error messages in the logfile')
-                    bb.warn('log_check: Matched keyword: [%s]\n\n' % m.group())
-
-                if found_error >= 1 and found_error <= 5:
-                    message += line + '\n'
-                    found_error += 1
-
-                if found_error == 6:
-                    bb.fatal(message)
 
     def _log_check(self):
         self._log_check_warn()
@@ -494,11 +529,109 @@ class RpmRootfs(Rootfs):
         if os.path.isdir(self.pm.install_dir_path) and not os.listdir(self.pm.install_dir_path):
            bb.utils.remove(self.pm.install_dir_path, True)
 
+class DpkgOpkgRootfs(Rootfs):
+    def __init__(self, d, progress_reporter=None):
+        super(DpkgOpkgRootfs, self).__init__(d, progress_reporter)
 
-class DpkgRootfs(Rootfs):
-    def __init__(self, d, manifest_dir):
-        super(DpkgRootfs, self).__init__(d)
+    def _get_pkgs_postinsts(self, status_file):
+        def _get_pkg_depends_list(pkg_depends):
+            pkg_depends_list = []
+            # filter version requirements like libc (>= 1.1)
+            for dep in pkg_depends.split(', '):
+                m_dep = re.match("^(.*) \(.*\)$", dep)
+                if m_dep:
+                    dep = m_dep.group(1)
+                pkg_depends_list.append(dep)
+
+            return pkg_depends_list
+
+        pkgs = {}
+        pkg_name = ""
+        pkg_status_match = False
+        pkg_depends = ""
+
+        with open(status_file) as status:
+            data = status.read()
+            status.close()
+            for line in data.split('\n'):
+                m_pkg = re.match("^Package: (.*)", line)
+                m_status = re.match("^Status:.*unpacked", line)
+                m_depends = re.match("^Depends: (.*)", line)
+
+                if m_pkg is not None:
+                    if pkg_name and pkg_status_match:
+                        pkgs[pkg_name] = _get_pkg_depends_list(pkg_depends)
+
+                    pkg_name = m_pkg.group(1)
+                    pkg_status_match = False
+                    pkg_depends = ""
+                elif m_status is not None:
+                    pkg_status_match = True
+                elif m_depends is not None:
+                    pkg_depends = m_depends.group(1)
+
+        # remove package dependencies not in postinsts
+        pkg_names = list(pkgs.keys())
+        for pkg_name in pkg_names:
+            deps = pkgs[pkg_name][:]
+
+            for d in deps:
+                if d not in pkg_names:
+                    pkgs[pkg_name].remove(d)
+
+        return pkgs
+
+    def _get_delayed_postinsts_common(self, status_file):
+        def _dep_resolve(graph, node, resolved, seen):
+            seen.append(node)
+
+            for edge in graph[node]:
+                if edge not in resolved:
+                    if edge in seen:
+                        raise RuntimeError("Packages %s and %s have " \
+                                "a circular dependency in postinsts scripts." \
+                                % (node, edge))
+                    _dep_resolve(graph, edge, resolved, seen)
+
+            resolved.append(node)
+
+        pkg_list = []
+
+        pkgs = None
+        if not self.d.getVar('PACKAGE_INSTALL', True).strip():
+            bb.note("Building empty image")
+        else:
+            pkgs = self._get_pkgs_postinsts(status_file)
+        if pkgs:
+            root = "__packagegroup_postinst__"
+            pkgs[root] = list(pkgs.keys())
+            _dep_resolve(pkgs, root, pkg_list, [])
+            pkg_list.remove(root)
+
+        if len(pkg_list) == 0:
+            return None
+
+        return pkg_list
+
+    def _save_postinsts_common(self, dst_postinst_dir, src_postinst_dir):
+        num = 0
+        for p in self._get_delayed_postinsts():
+            bb.utils.mkdirhier(dst_postinst_dir)
+
+            if os.path.exists(os.path.join(src_postinst_dir, p + ".postinst")):
+                shutil.copy(os.path.join(src_postinst_dir, p + ".postinst"),
+                            os.path.join(dst_postinst_dir, "%03d-%s" % (num, p)))
+
+            num += 1
+
+class DpkgRootfs(DpkgOpkgRootfs):
+    def __init__(self, d, manifest_dir, progress_reporter=None):
+        super(DpkgRootfs, self).__init__(d, progress_reporter)
         self.log_check_regex = '^E:'
+        self.log_check_expected_regexes = \
+        [
+            "^E: Unmet dependencies."
+        ]
 
         bb.utils.remove(self.image_rootfs, True)
         bb.utils.remove(self.d.getVar('MULTILIB_TEMP_ROOTFS', True), True)
@@ -510,6 +643,8 @@ class DpkgRootfs(Rootfs):
 
     def _create(self):
         pkgs_to_install = self.manifest.parse_initial_manifest()
+        deb_pre_process_cmds = self.d.getVar('DEB_PREPROCESS_COMMANDS', True)
+        deb_post_process_cmds = self.d.getVar('DEB_POSTPROCESS_COMMANDS', True)
 
         alt_dir = self.d.expand("${IMAGE_ROOTFS}/var/lib/dpkg/alternatives")
         bb.utils.mkdirhier(alt_dir)
@@ -517,14 +652,32 @@ class DpkgRootfs(Rootfs):
         # update PM index files
         self.pm.write_index()
 
+        execute_pre_post_process(self.d, deb_pre_process_cmds)
+
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
+            # Don't support incremental, so skip that
+            self.progress_reporter.next_stage()
+
         self.pm.update()
+
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
 
         for pkg_type in self.install_order:
             if pkg_type in pkgs_to_install:
                 self.pm.install(pkgs_to_install[pkg_type],
                                 [False, True][pkg_type == Manifest.PKG_TYPE_ATTEMPT_ONLY])
 
+        if self.progress_reporter:
+            # Don't support attemptonly, so skip that
+            self.progress_reporter.next_stage()
+            self.progress_reporter.next_stage()
+
         self.pm.install_complementary()
+
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
 
         self._setup_dbg_rootfs(['/var/lib/dpkg'])
 
@@ -534,39 +687,23 @@ class DpkgRootfs(Rootfs):
 
         self.pm.run_pre_post_installs()
 
+        execute_pre_post_process(self.d, deb_post_process_cmds)
+
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
+
     @staticmethod
     def _depends_list():
-        return ['DEPLOY_DIR_DEB', 'DEB_SDK_ARCH', 'APTCONF_TARGET', 'APT_ARGS', 'DPKG_ARCH', 'DEB_PREPROCESS_COMMANDS', 'DEB_POSTPROCESS_COMMAND']
+        return ['DEPLOY_DIR_DEB', 'DEB_SDK_ARCH', 'APTCONF_TARGET', 'APT_ARGS', 'DPKG_ARCH', 'DEB_PREPROCESS_COMMANDS', 'DEB_POSTPROCESS_COMMANDS']
 
     def _get_delayed_postinsts(self):
-        pkg_list = []
-        with open(self.image_rootfs + "/var/lib/dpkg/status") as status:
-            for line in status:
-                m_pkg = re.match("^Package: (.*)", line)
-                m_status = re.match("^Status:.*unpacked", line)
-                if m_pkg is not None:
-                    pkg_name = m_pkg.group(1)
-                elif m_status is not None:
-                    pkg_list.append(pkg_name)
-
-        if len(pkg_list) == 0:
-            return None
-
-        return pkg_list
+        status_file = self.image_rootfs + "/var/lib/dpkg/status"
+        return self._get_delayed_postinsts_common(status_file)
 
     def _save_postinsts(self):
-        num = 0
-        for p in self._get_delayed_postinsts():
-            dst_postinst_dir = self.d.expand("${IMAGE_ROOTFS}${sysconfdir}/deb-postinsts")
-            src_postinst_dir = self.d.expand("${IMAGE_ROOTFS}/var/lib/dpkg/info")
-
-            bb.utils.mkdirhier(dst_postinst_dir)
-
-            if os.path.exists(os.path.join(src_postinst_dir, p + ".postinst")):
-                shutil.copy(os.path.join(src_postinst_dir, p + ".postinst"),
-                            os.path.join(dst_postinst_dir, "%03d-%s" % (num, p)))
-
-            num += 1
+        dst_postinst_dir = self.d.expand("${IMAGE_ROOTFS}${sysconfdir}/deb-postinsts")
+        src_postinst_dir = self.d.expand("${IMAGE_ROOTFS}/var/lib/dpkg/info")
+        return self._save_postinsts_common(dst_postinst_dir, src_postinst_dir)
 
     def _handle_intercept_failure(self, registered_pkgs):
         self.pm.mark_packages("unpacked", registered_pkgs.split())
@@ -579,9 +716,9 @@ class DpkgRootfs(Rootfs):
         pass
 
 
-class OpkgRootfs(Rootfs):
-    def __init__(self, d, manifest_dir):
-        super(OpkgRootfs, self).__init__(d)
+class OpkgRootfs(DpkgOpkgRootfs):
+    def __init__(self, d, manifest_dir, progress_reporter=None):
+        super(OpkgRootfs, self).__init__(d, progress_reporter)
         self.log_check_regex = '(exit 1|Collected errors)'
 
         self.manifest = OpkgManifest(d, manifest_dir)
@@ -768,7 +905,6 @@ class OpkgRootfs(Rootfs):
         pkgs_to_install = self.manifest.parse_initial_manifest()
         opkg_pre_process_cmds = self.d.getVar('OPKG_PREPROCESS_COMMANDS', True)
         opkg_post_process_cmds = self.d.getVar('OPKG_POSTPROCESS_COMMANDS', True)
-        rootfs_post_install_cmds = self.d.getVar('ROOTFS_POSTINSTALL_COMMAND', True)
 
         # update PM index files, unless users provide their own feeds
         if (self.d.getVar('BUILD_IMAGES_FROM_FEEDS', True) or "") != "1":
@@ -776,12 +912,23 @@ class OpkgRootfs(Rootfs):
 
         execute_pre_post_process(self.d, opkg_pre_process_cmds)
 
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
+            # Steps are a bit different in order, skip next
+            self.progress_reporter.next_stage()
+
         self.pm.update()
 
         self.pm.handle_bad_recommendations()
 
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
+
         if self.inc_opkg_image_gen == "1":
             self._remove_extra_packages(pkgs_to_install)
+
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
 
         for pkg_type in self.install_order:
             if pkg_type in pkgs_to_install:
@@ -794,53 +941,38 @@ class OpkgRootfs(Rootfs):
                 self.pm.install(pkgs_to_install[pkg_type],
                                 [False, True][pkg_type == Manifest.PKG_TYPE_ATTEMPT_ONLY])
 
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
+
         self.pm.install_complementary()
 
-        self._setup_dbg_rootfs(['/var/lib/opkg'])
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
+
+        self._setup_dbg_rootfs(['/etc', '/var/lib/opkg', '/usr/lib/ssl'])
 
         execute_pre_post_process(self.d, opkg_post_process_cmds)
-        execute_pre_post_process(self.d, rootfs_post_install_cmds)
 
         if self.inc_opkg_image_gen == "1":
             self.pm.backup_packaging_data()
+
+        if self.progress_reporter:
+            self.progress_reporter.next_stage()
 
     @staticmethod
     def _depends_list():
         return ['IPKGCONF_SDK', 'IPK_FEED_URIS', 'DEPLOY_DIR_IPK', 'IPKGCONF_TARGET', 'INC_IPK_IMAGE_GEN', 'OPKG_ARGS', 'OPKGLIBDIR', 'OPKG_PREPROCESS_COMMANDS', 'OPKG_POSTPROCESS_COMMANDS', 'OPKGLIBDIR']
 
     def _get_delayed_postinsts(self):
-        pkg_list = []
         status_file = os.path.join(self.image_rootfs,
                                    self.d.getVar('OPKGLIBDIR', True).strip('/'),
                                    "opkg", "status")
-
-        with open(status_file) as status:
-            for line in status:
-                m_pkg = re.match("^Package: (.*)", line)
-                m_status = re.match("^Status:.*unpacked", line)
-                if m_pkg is not None:
-                    pkg_name = m_pkg.group(1)
-                elif m_status is not None:
-                    pkg_list.append(pkg_name)
-
-        if len(pkg_list) == 0:
-            return None
-
-        return pkg_list
+        return self._get_delayed_postinsts_common(status_file)
 
     def _save_postinsts(self):
-        num = 0
-        for p in self._get_delayed_postinsts():
-            dst_postinst_dir = self.d.expand("${IMAGE_ROOTFS}${sysconfdir}/ipk-postinsts")
-            src_postinst_dir = self.d.expand("${IMAGE_ROOTFS}${OPKGLIBDIR}/opkg/info")
-
-            bb.utils.mkdirhier(dst_postinst_dir)
-
-            if os.path.exists(os.path.join(src_postinst_dir, p + ".postinst")):
-                shutil.copy(os.path.join(src_postinst_dir, p + ".postinst"),
-                            os.path.join(dst_postinst_dir, "%03d-%s" % (num, p)))
-
-            num += 1
+        dst_postinst_dir = self.d.expand("${IMAGE_ROOTFS}${sysconfdir}/ipk-postinsts")
+        src_postinst_dir = self.d.expand("${IMAGE_ROOTFS}${OPKGLIBDIR}/opkg/info")
+        return self._save_postinsts_common(dst_postinst_dir, src_postinst_dir)
 
     def _handle_intercept_failure(self, registered_pkgs):
         self.pm.mark_packages("unpacked", registered_pkgs.split())
@@ -850,7 +982,7 @@ class OpkgRootfs(Rootfs):
         self._log_check_error()
 
     def _cleanup(self):
-        pass
+        self.pm.remove_lists()
 
 def get_class_for_type(imgtype):
     return {"rpm": RpmRootfs,
@@ -862,32 +994,32 @@ def variable_depends(d, manifest_dir=None):
     cls = get_class_for_type(img_type)
     return cls._depends_list()
 
-def create_rootfs(d, manifest_dir=None):
+def create_rootfs(d, manifest_dir=None, progress_reporter=None):
     env_bkp = os.environ.copy()
 
     img_type = d.getVar('IMAGE_PKGTYPE', True)
     if img_type == "rpm":
-        RpmRootfs(d, manifest_dir).create()
+        RpmRootfs(d, manifest_dir, progress_reporter).create()
     elif img_type == "ipk":
-        OpkgRootfs(d, manifest_dir).create()
+        OpkgRootfs(d, manifest_dir, progress_reporter).create()
     elif img_type == "deb":
-        DpkgRootfs(d, manifest_dir).create()
+        DpkgRootfs(d, manifest_dir, progress_reporter).create()
 
     os.environ.clear()
     os.environ.update(env_bkp)
 
 
-def image_list_installed_packages(d, format=None, rootfs_dir=None):
+def image_list_installed_packages(d, rootfs_dir=None):
     if not rootfs_dir:
         rootfs_dir = d.getVar('IMAGE_ROOTFS', True)
 
     img_type = d.getVar('IMAGE_PKGTYPE', True)
     if img_type == "rpm":
-        return RpmPkgsList(d, rootfs_dir).list(format)
+        return RpmPkgsList(d, rootfs_dir).list_pkgs()
     elif img_type == "ipk":
-        return OpkgPkgsList(d, rootfs_dir, d.getVar("IPKGCONF_TARGET", True)).list(format)
+        return OpkgPkgsList(d, rootfs_dir, d.getVar("IPKGCONF_TARGET", True)).list_pkgs()
     elif img_type == "deb":
-        return DpkgPkgsList(d, rootfs_dir).list(format)
+        return DpkgPkgsList(d, rootfs_dir).list_pkgs()
 
 if __name__ == "__main__":
     """

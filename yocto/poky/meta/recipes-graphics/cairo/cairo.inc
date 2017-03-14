@@ -9,11 +9,14 @@ Extension."
 HOMEPAGE = "http://cairographics.org"
 BUGTRACKER = "http://bugs.freedesktop.org"
 SECTION = "libs"
+
 LICENSE = "MPL-1 & LGPLv2.1 & GPLv3+"
 LICENSE_${PN} = "MPL-1 & LGPLv2.1"
 LICENSE_${PN}-dev = "MPL-1 & LGPLv2.1"
 LICENSE_${PN}-gobject = "MPL-1 & LGPLv2.1"
+LICENSE_${PN}-script-interpreter = "MPL-1 & LGPLv2.1"
 LICENSE_${PN}-perf-utils = "GPLv3+"
+
 X11DEPENDS = "virtual/libx11 libsm libxrender libxext"
 DEPENDS = "libpng fontconfig pixman glib-2.0 zlib"
 
@@ -33,7 +36,7 @@ EXTRA_OECONF += "${@get_cairo_fpu_setting(bb, d)} \
                  --enable-tee \
                 "
 
-inherit autotools pkgconfig
+inherit autotools pkgconfig upstream-version-is-even gtk-doc
 
 # We don't depend on binutils so we need to disable this
 export ac_cv_lib_bfd_bfd_openr="no"
@@ -41,5 +44,3 @@ export ac_cv_lib_bfd_bfd_openr="no"
 export ac_cv_lib_lzo2_lzo2a_decompress="no"
 
 BBCLASSEXTEND = "native"
-
-CFLAGS += "-ffat-lto-objects"

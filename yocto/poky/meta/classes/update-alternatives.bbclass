@@ -61,7 +61,7 @@
 ALTERNATIVE_PRIORITY = "10"
 
 # We need special processing for vardeps because it can not work on
-# modified flag values.  So we agregate the flags into a new variable
+# modified flag values.  So we aggregate the flags into a new variable
 # and include that vairable in the set.
 UPDALTVARS  = "ALTERNATIVE ALTERNATIVE_LINK_NAME ALTERNATIVE_TARGET ALTERNATIVE_PRIORITY"
 
@@ -71,14 +71,14 @@ def gen_updatealternativesvardeps(d):
 
     # First compute them for non_pkg versions
     for v in vars:
-        for flag in (d.getVarFlags(v) or {}):
+        for flag in sorted((d.getVarFlags(v) or {}).keys()):
             if flag == "doc" or flag == "vardeps" or flag == "vardepsexp":
                 continue
             d.appendVar('%s_VARDEPS' % (v), ' %s:%s' % (flag, d.getVarFlag(v, flag, False)))
 
     for p in pkgs:
         for v in vars:
-            for flag in (d.getVarFlags("%s_%s" % (v,p)) or {}):
+            for flag in sorted((d.getVarFlags("%s_%s" % (v,p)) or {}).keys()):
                 if flag == "doc" or flag == "vardeps" or flag == "vardepsexp":
                     continue
                 d.appendVar('%s_VARDEPS_%s' % (v,p), ' %s:%s' % (flag, d.getVarFlag('%s_%s' % (v,p), flag, False)))
@@ -195,8 +195,8 @@ python populate_packages_updatealternatives () {
     pkgdest = d.getVar('PKGD', True)
     for pkg in (d.getVar('PACKAGES', True) or "").split():
         # Create post install/removal scripts
-        alt_setup_links = ""
-        alt_remove_links = ""
+        alt_setup_links = "# Begin section update-alternatives\n"
+        alt_remove_links = "# Begin section update-alternatives\n"
         for alt_name in (d.getVar('ALTERNATIVE_%s' % pkg, True) or "").split():
             alt_link     = d.getVarFlag('ALTERNATIVE_LINK_NAME', alt_name, True)
             alt_target   = d.getVarFlag('ALTERNATIVE_TARGET_%s' % pkg, alt_name, True) or d.getVarFlag('ALTERNATIVE_TARGET', alt_name, True)
@@ -219,25 +219,40 @@ python populate_packages_updatealternatives () {
             # Default to generate shell script.. eventually we may want to change this...
             alt_target = os.path.normpath(alt_target)
 
-            alt_setup_links  += '\tupdate-alternatives --install %s %s %s %s\n' % (alt_link, alt_name, alt_target, alt_priority)
-            alt_remove_links += '\tupdate-alternatives --remove  %s %s\n' % (alt_name, alt_target)
+            alt_setup_links  += 'update-alternatives --install %s %s %s %s\n' % (alt_link, alt_name, alt_target, alt_priority)
+            alt_remove_links += 'update-alternatives --remove  %s %s\n' % (alt_name, alt_target)
 
-        if alt_setup_links:
+        alt_setup_links += "# End section update-alternatives\n"
+        alt_remove_links += "# End section update-alternatives\n"
+
+        if len(alt_setup_links.splitlines()) > 2:
             # RDEPENDS setup
             provider = d.getVar('VIRTUAL-RUNTIME_update-alternatives', True)
             if provider:
                 #bb.note('adding runtime requirement for update-alternatives for %s' % pkg)
-                d.appendVar('RDEPENDS_%s' % pkg, ' ' + d.getVar('MLPREFIX') + provider)
+                d.appendVar('RDEPENDS_%s' % pkg, ' ' + d.getVar('MLPREFIX', False) + provider)
 
             bb.note('adding update-alternatives calls to postinst/prerm for %s' % pkg)
             bb.note('%s' % alt_setup_links)
             postinst = d.getVar('pkg_postinst_%s' % pkg, True) or '#!/bin/sh\n'
-            postinst += alt_setup_links
+            postinst = postinst.splitlines(True)
+            try:
+                index = postinst.index('# Begin section update-rc.d\n')
+                postinst.insert(index, alt_setup_links)
+            except ValueError:
+                postinst.append(alt_setup_links)
+            postinst = ''.join(postinst)
             d.setVar('pkg_postinst_%s' % pkg, postinst)
 
             bb.note('%s' % alt_remove_links)
             prerm = d.getVar('pkg_prerm_%s' % pkg, True) or '#!/bin/sh\n'
-            prerm += alt_remove_links
+            prerm = prerm.splitlines(True)
+            try:
+                index = prerm.index('# End section update-rc.d\n')
+                prerm.insert(index + 1, alt_remove_links)
+            except ValueError:
+                prerm.append(alt_remove_links)
+            prerm = ''.join(prerm)
             d.setVar('pkg_prerm_%s' % pkg, prerm)
 }
 
@@ -252,7 +267,7 @@ python package_do_filedeps_append () {
             alt_target   = alt_target or d.getVar('ALTERNATIVE_TARGET_%s' % pkg, True) or d.getVar('ALTERNATIVE_TARGET', True) or alt_link
 
             if alt_link == alt_target:
-                bb.warn('alt_link == alt_target: %s == %s' % (alt_link, alt_target))
+                bb.warn('%s: alt_link == alt_target: %s == %s' % (pn, alt_link, alt_target))
                 alt_target = '%s.%s' % (alt_target, pn)
 
             if not os.path.lexists('%s/%s/%s' % (pkgdest, pkg, alt_target)):

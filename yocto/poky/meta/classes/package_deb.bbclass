@@ -6,7 +6,8 @@ inherit package
 
 IMAGE_PKGTYPE ?= "deb"
 
-DPKG_ARCH ?= "${TARGET_ARCH}" 
+DPKG_ARCH ?= "${@debian_arch_map(d.getVar('TARGET_ARCH', True), d.getVar('TUNE_FEATURES', True))}"
+DPKG_ARCH[vardepvalue] = "${DPKG_ARCH}"
 
 PKGWRITEDIRDEB = "${WORKDIR}/deploy-debs"
 
@@ -14,6 +15,28 @@ APTCONF_TARGET = "${WORKDIR}"
 
 APT_ARGS = "${@['', '--no-install-recommends'][d.getVar("NO_RECOMMENDATIONS", True) == "1"]}"
 
+def debian_arch_map(arch, tune):
+    tune_features = tune.split()
+    if arch in ["i586", "i686"]:
+        return "i386"
+    if arch == "x86_64":
+        if "mx32" in tune_features:
+            return "x32"
+        return "amd64"
+    if arch.startswith("mips"):
+        endian = ["el", ""]["bigendian" in tune_features]
+        if "n64" in tune_features:
+            return "mips64" + endian
+        if "n32" in tune_features:
+            return "mipsn32" + endian
+        return "mips" + endian
+    if arch == "powerpc":
+        return arch + ["", "spe"]["spe" in tune_features]
+    if arch == "aarch64":
+        return "arm64"
+    if arch == "arm":
+        return arch + ["el", "hf"]["callconvention-hard" in tune_features]
+    return arch
 #
 # install a bunch of packages using apt
 # the following shell variables needs to be set before calling this func:
@@ -21,7 +44,7 @@ APT_ARGS = "${@['', '--no-install-recommends'][d.getVar("NO_RECOMMENDATIONS", Tr
 # INSTALL_BASEARCH_DEB - install base architecutre
 # INSTALL_ARCHS_DEB - list of available archs
 # INSTALL_PACKAGES_NORMAL_DEB - packages to be installed
-# INSTALL_PACKAGES_ATTEMPTONLY_DEB - packages attemped to be installed only
+# INSTALL_PACKAGES_ATTEMPTONLY_DEB - packages attempted to be installed only
 # INSTALL_PACKAGES_LINGUAS_DEB - additional packages for uclibc
 # INSTALL_TASK_DEB - task name
 
@@ -29,6 +52,9 @@ python do_package_deb () {
     import re, copy
     import textwrap
     import subprocess
+    import collections
+
+    oldcwd = os.getcwd()
 
     workdir = d.getVar('WORKDIR', True)
     if not workdir:
@@ -75,7 +101,7 @@ python do_package_deb () {
             pkgname = pkg
         localdata.setVar('PKG', pkgname)
 
-        localdata.setVar('OVERRIDES', pkg)
+        localdata.setVar('OVERRIDES', d.getVar("OVERRIDES", False) + ":" + pkg)
 
         bb.data.update_data(localdata)
         basedir = os.path.join(os.path.dirname(root))
@@ -87,21 +113,20 @@ python do_package_deb () {
         cleanupcontrol(root)
         from glob import glob
         g = glob('*')
-        if not g and localdata.getVar('ALLOW_EMPTY') != "1":
+        if not g and localdata.getVar('ALLOW_EMPTY', False) != "1":
             bb.note("Not creating empty archive for %s-%s-%s" % (pkg, localdata.getVar('PKGV', True), localdata.getVar('PKGR', True)))
             bb.utils.unlockfile(lf)
             continue
 
         controldir = os.path.join(root, 'DEBIAN')
         bb.utils.mkdirhier(controldir)
-        os.chmod(controldir, 0755)
+        os.chmod(controldir, 0o755)
         try:
-            ctrlfile = open(os.path.join(controldir, 'control'), 'w')
-            # import codecs
-            # ctrlfile = codecs.open("someFile", "w", "utf-8")
+            import codecs
+            ctrlfile = codecs.open(os.path.join(controldir, 'control'), 'w', 'utf-8')
         except OSError:
             bb.utils.unlockfile(lf)
-            raise bb.build.FuncFailed("unable to open control file for writing.")
+            bb.fatal("unable to open control file for writing")
 
         fields = []
         pe = d.getVar('PKGE', True)
@@ -140,16 +165,18 @@ python do_package_deb () {
             return l2
 
         ctrlfile.write("Package: %s\n" % pkgname)
+        if d.getVar('PACKAGE_ARCH', True) == "all":
+            ctrlfile.write("Multi-Arch: foreign\n")
         # check for required fields
         try:
             for (c, fs) in fields:
                 for f in fs:
-                     if localdata.getVar(f) is None:
+                     if localdata.getVar(f, False) is None:
                          raise KeyError(f)
                 # Special behavior for description...
                 if 'DESCRIPTION' in fs:
                      summary = localdata.getVar('SUMMARY', True) or localdata.getVar('DESCRIPTION', True) or "."
-                     ctrlfile.write('Description: %s\n' % unicode(summary))
+                     ctrlfile.write('Description: %s\n' % summary)
                      description = localdata.getVar('DESCRIPTION', True) or "."
                      description = textwrap.dedent(description).strip()
                      if '\\n' in description:
@@ -158,24 +185,25 @@ python do_package_deb () {
                              # We don't limit the width when manually indent, but we do
                              # need the textwrap.fill() to set the initial_indent and
                              # subsequent_indent, so set a large width
-                             ctrlfile.write('%s\n' % unicode(textwrap.fill(t, width=100000, initial_indent=' ', subsequent_indent=' ')))
+                             ctrlfile.write('%s\n' % textwrap.fill(t, width=100000, initial_indent=' ', subsequent_indent=' '))
                      else:
                          # Auto indent
-                         ctrlfile.write('%s\n' % unicode(textwrap.fill(description.strip(), width=74, initial_indent=' ', subsequent_indent=' ')))
+                         ctrlfile.write('%s\n' % textwrap.fill(description.strip(), width=74, initial_indent=' ', subsequent_indent=' '))
 
                 else:
-                     ctrlfile.write(unicode(c % tuple(pullData(fs, localdata))))
+                     ctrlfile.write(c % tuple(pullData(fs, localdata)))
         except KeyError:
             import sys
             (type, value, traceback) = sys.exc_info()
             bb.utils.unlockfile(lf)
             ctrlfile.close()
-            raise bb.build.FuncFailed("Missing field for deb generation: %s" % value)
+            bb.fatal("Missing field for deb generation: %s" % value)
+
         # more fields
 
         custom_fields_chunk = get_package_additional_metadata("deb", localdata)
         if custom_fields_chunk is not None:
-            ctrlfile.write(unicode(custom_fields_chunk))
+            ctrlfile.write(custom_fields_chunk)
             ctrlfile.write("\n")
 
         mapping_rename_hook(localdata)
@@ -205,34 +233,39 @@ python do_package_deb () {
 
         rdepends = bb.utils.explode_dep_versions2(localdata.getVar("RDEPENDS", True) or "")
         debian_cmp_remap(rdepends)
-        for dep in rdepends:
+        for dep in list(rdepends.keys()):
+                if dep == pkg:
+                        del rdepends[dep]
+                        continue
                 if '*' in dep:
                         del rdepends[dep]
         rrecommends = bb.utils.explode_dep_versions2(localdata.getVar("RRECOMMENDS", True) or "")
         debian_cmp_remap(rrecommends)
-        for dep in rrecommends:
+        for dep in list(rrecommends.keys()):
                 if '*' in dep:
                         del rrecommends[dep]
         rsuggests = bb.utils.explode_dep_versions2(localdata.getVar("RSUGGESTS", True) or "")
         debian_cmp_remap(rsuggests)
-        rprovides = bb.utils.explode_dep_versions2(localdata.getVar("RPROVIDES", True) or "")
+        # Deliberately drop version information here, not wanted/supported by deb
+        rprovides = dict.fromkeys(bb.utils.explode_dep_versions2(localdata.getVar("RPROVIDES", True) or ""), [])
+        rprovides = collections.OrderedDict(sorted(rprovides.items(), key=lambda x: x[0]))
         debian_cmp_remap(rprovides)
         rreplaces = bb.utils.explode_dep_versions2(localdata.getVar("RREPLACES", True) or "")
         debian_cmp_remap(rreplaces)
         rconflicts = bb.utils.explode_dep_versions2(localdata.getVar("RCONFLICTS", True) or "")
         debian_cmp_remap(rconflicts)
         if rdepends:
-            ctrlfile.write("Depends: %s\n" % unicode(bb.utils.join_deps(rdepends)))
+            ctrlfile.write("Depends: %s\n" % bb.utils.join_deps(rdepends))
         if rsuggests:
-            ctrlfile.write("Suggests: %s\n" % unicode(bb.utils.join_deps(rsuggests)))
+            ctrlfile.write("Suggests: %s\n" % bb.utils.join_deps(rsuggests))
         if rrecommends:
-            ctrlfile.write("Recommends: %s\n" % unicode(bb.utils.join_deps(rrecommends)))
+            ctrlfile.write("Recommends: %s\n" % bb.utils.join_deps(rrecommends))
         if rprovides:
-            ctrlfile.write("Provides: %s\n" % unicode(bb.utils.join_deps(rprovides)))
+            ctrlfile.write("Provides: %s\n" % bb.utils.join_deps(rprovides))
         if rreplaces:
-            ctrlfile.write("Replaces: %s\n" % unicode(bb.utils.join_deps(rreplaces)))
+            ctrlfile.write("Replaces: %s\n" % bb.utils.join_deps(rreplaces))
         if rconflicts:
-            ctrlfile.write("Conflicts: %s\n" % unicode(bb.utils.join_deps(rconflicts)))
+            ctrlfile.write("Conflicts: %s\n" % bb.utils.join_deps(rconflicts))
         ctrlfile.close()
 
         for script in ["preinst", "postinst", "prerm", "postrm"]:
@@ -244,7 +277,7 @@ python do_package_deb () {
                 scriptfile = open(os.path.join(controldir, script), 'w')
             except OSError:
                 bb.utils.unlockfile(lf)
-                raise bb.build.FuncFailed("unable to open %s script file for writing." % script)
+                bb.fatal("unable to open %s script file for writing" % script)
 
             if scriptvar.startswith("#!"):
                 pos = scriptvar.find("\n") + 1
@@ -260,7 +293,7 @@ python do_package_deb () {
             scriptfile.write(scriptvar[pos:])
             scriptfile.write('\n')
             scriptfile.close()
-            os.chmod(os.path.join(controldir, script), 0755)
+            os.chmod(os.path.join(controldir, script), 0o755)
 
         conffiles_str = ' '.join(get_conffiles(pkg, d))
         if conffiles_str:
@@ -268,7 +301,7 @@ python do_package_deb () {
                 conffiles = open(os.path.join(controldir, 'conffiles'), 'w')
             except OSError:
                 bb.utils.unlockfile(lf)
-                raise bb.build.FuncFailed("unable to open conffiles for writing.")
+                bb.fatal("unable to open conffiles for writing")
             for f in conffiles_str.split():
                 if os.path.exists(oe.path.join(root, f)):
                     conffiles.write('%s\n' % f)
@@ -278,11 +311,17 @@ python do_package_deb () {
         ret = subprocess.call("PATH=\"%s\" dpkg-deb -b %s %s" % (localdata.getVar("PATH", True), root, pkgoutdir), shell=True)
         if ret != 0:
             bb.utils.unlockfile(lf)
-            raise bb.build.FuncFailed("dpkg-deb execution failed")
+            bb.fatal("dpkg-deb execution failed")
 
         cleanupcontrol(root)
         bb.utils.unlockfile(lf)
+    os.chdir(oldcwd)
 }
+# Indirect references to these vars
+do_package_write_deb[vardeps] += "PKGV PKGR PKGV DESCRIPTION SECTION PRIORITY MAINTAINER DPKG_ARCH PN HOMEPAGE"
+# Otherwise allarch packages may change depending on override configuration
+do_package_deb[vardepsexclude] = "OVERRIDES"
+
 
 SSTATETASKS += "do_package_write_deb"
 do_package_write_deb[sstate-inputdirs] = "${PKGWRITEDIRDEB}"
@@ -303,15 +342,6 @@ python () {
         deps = ' dpkg-native:do_populate_sysroot virtual/fakeroot-native:do_populate_sysroot'
         d.appendVarFlag('do_package_write_deb', 'depends', deps)
         d.setVarFlag('do_package_write_deb', 'fakeroot', "1")
-
-    # Map TARGET_ARCH to Debian's ideas about architectures
-    darch = d.getVar('DPKG_ARCH', True)
-    if darch in ["x86", "i486", "i586", "i686", "pentium"]:
-         d.setVar('DPKG_ARCH', 'i386')
-    elif darch == "x86_64":
-         d.setVar('DPKG_ARCH', 'amd64')
-    elif darch == "arm":
-         d.setVar('DPKG_ARCH', 'armel')
 }
 
 python do_package_write_deb () {

@@ -1,4 +1,5 @@
 {% extends "basebuildpage.html" %}
+{% block title %} Directory structure - {{ target.target }} {{ build.machine }} - {{ build.project.name }} - Toaster {% endblock %}
 {% block extraheadcontent %}
 {% load static %}
 <link rel="stylesheet" href="{% static 'css/jquery.treetable.css' %}" type="text/css">
@@ -17,6 +18,13 @@
 {% load projecttags %}
 
 <script type='text/javascript'>
+  var ctx = {};
+  ctx.target = "{{target.target}}";
+
+  $(document).ready(function(){
+    $("#menu-"+ctx.target).addClass("active");
+  });
+
     function setupTreetable() {
         $("#dirtable").treetable({
             expandable: true,
@@ -40,8 +48,7 @@
                         url     : url,
                         data    : "start=" + start,
                         success : function(response) {
-                            var objects = $.parseJSON(response);
-                            addRows(n, objects)
+                            addRows(n, response)
                         },
                         error   : function(jqXHR, textStatus, errorThrown ) {alert(textStatus + ":" + errorThrown)},
                      });
@@ -59,9 +66,6 @@
     function formatRow(o) {
         /* setup tr-wide formatting */
         var tr = '<tr class="';
-        if (o.link_to != null) {
-            tr += 'muted ';
-        }
         if (o.isdir && o.childcount) {
             tr += 'branch" data-tt-branch="true" ';
         }
@@ -75,7 +79,7 @@
         tr += '>';
 
         /* setup td specific formatting */
-        var link_to = td(o.link_to);
+				var link_to = '<td class="text-muted">' + o.link_to + '</td>';
         var size = '<td class = "sizecol">' + o.size + '</td>'
         var permission = td(o.permission);
         var owner = td(o.owner);
@@ -96,7 +100,7 @@
             if (o.childcount) {
                 name += '<a href="">';
             }
-            name += '<i class="icon-folder-close"></i>';
+            name += '<span class="glyphicon glyphicon-folder-close"></span>';
             name += '&nbsp;' + o.name;
             if (o.childcount) {
                 name += '</a>';
@@ -104,12 +108,16 @@
             name += '</td>';
         }
         else {
-            name = '<td>';
             if (o.link_to == null) {
-                name += '<i class="icon-file"></i>';
+                namespan = 2;
+                if (o.package == null) {
+                  namespan = 3;
+                }
+                var colspan = 'colspan="' + namespan + '"';
+                name = '<td ' + colspan + '><span class="glyphicon glyphicon-file"></span>';
             }
             else {
-                name += '<i class="icon-hand-right"></i>';
+                name = '<td class="text-muted"><span class="glyphicon glyphicon-hand-right"></span>';
             }
             name += '&nbsp;' + o.name;
             name += '</td>';
@@ -130,10 +138,10 @@
             package += '</a>';
             if (o.installed_package != o.package) {
                 /* make class muted and add hover help */
-                package += '<span class="muted"> as ' + o.installed_package + ' </span>';
-                package += '<i class="icon-question-sign get-help hover-help" ';
+                package += '<span class="text-muted"> as ' + o.installed_package + ' </span>';
+                package += '<span class="glyphicon glyphicon-question-sign get-help hover-help" ';
                 package += 'title="' + o.package + ' was renamed at packaging time and was installed in your image as ' + o.installed_package + '">';
-                package += '</i>';
+                package += '</span>';
             }
         }
         package = td(package);
@@ -180,22 +188,22 @@
     }
 </script>
 
-<div class="span10">
+<div class="col-md-10">
 
-    <div class="page-header">
+    <div class="page-header build-data">
         <h1> {{target.target}} </h1>
     </div>
 
-    <ul class="nav nav-pills">
-        <li class="">
+    <ul class="nav nav-tabs">
+        <li>
             <a href="{% url 'target' build.id target.id %}">
-            <i class="icon-question-sign get-help" title="Of all the packages built, the subset installed in the root file system of this image"></i>
+            <span class="glyphicon glyphicon-question-sign get-help" title="Of all the packages built, the subset installed in the root file system of this image"></span>
                 Packages included ({{target.package_count}} - {{packages_sum|filtered_filesizeformat}})
             </a>
         </li>
         <li class="active">
             <a href="{% url 'dirinfo' build.id target.id %}">
-                <i class="icon-question-sign get-help" title="The directories and files in the root file system of this image"></i>
+                <span class="glyphicon glyphicon-question-sign get-help" title="The directories and files in the root file system of this image"></span>
                 Directory structure
             </a>
         </li>
@@ -208,10 +216,10 @@
                     <th>Directory / File</th>
                     <th>Symbolic link to</th>
                     <th>Source package</th>
-                    <th>Size</th>
-                    <th>Permissions</th>
-                    <th>Owner</th>
-                    <th>Group</th>
+                    <th class="narrow-col">Size</th>
+                    <th class="medium-col">Permissions</th>
+                    <th class="narrow-col">Owner</th>
+                    <th class="narrow-col">Group</th>
                 </tr>
             </thead>
             <tbody>
@@ -231,7 +239,7 @@
             </tbody>
         </table>
     </div> <!-- directory-structure -->
-</div> <!-- span10 -->
+</div> <!-- col-md-10 -->
 
 {% endblock buildinfomain %}
 

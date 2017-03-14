@@ -10,6 +10,8 @@ LIBCOVERRIDE = ":${NATIVESDKLIBC}"
 CLASSOVERRIDE = "class-nativesdk"
 MACHINEOVERRIDES = ""
 
+MULTILIBS = ""
+
 #
 # Update PACKAGE_ARCH and PACKAGE_ARCHS
 #
@@ -56,6 +58,7 @@ base_prefix = "${SDKPATHNATIVE}"
 prefix = "${SDKPATHNATIVE}${prefix_nativesdk}"
 exec_prefix = "${SDKPATHNATIVE}${prefix_nativesdk}"
 baselib = "lib"
+sbindir = "${bindir}"
 
 export PKG_CONFIG_DIR = "${STAGING_DIR_HOST}${libdir}/pkgconfig"
 export PKG_CONFIG_SYSROOT_DIR = "${STAGING_DIR_HOST}"
@@ -94,3 +97,5 @@ do_populate_sysroot[stamp-extra-info] = ""
 do_packagedata[stamp-extra-info] = ""
 
 USE_NLS = "${SDKUSE_NLS}"
+
+OLDEST_KERNEL = "${SDK_OLDEST_KERNEL}"
