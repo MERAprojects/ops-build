@@ -3,6 +3,7 @@
 #
 
 SUMMARY = "Clutter package groups"
+LICENSE = "MIT"
 
 PR = "r6"
 

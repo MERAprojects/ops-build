@@ -72,7 +72,7 @@ syslinux_hddimg_populate() {
 }
 
 syslinux_hddimg_install() {
-	syslinux ${IMGDEPLOYDIR}/${IMAGE_NAME}.hddimg
+	syslinux ${DEPLOY_DIR_IMAGE}/${IMAGE_NAME}.hddimg
 }
 
 syslinux_hdddirect_install() {
@@ -100,12 +100,12 @@ python build_syslinux_cfg () {
 
     cfile = d.getVar('SYSLINUX_CFG', True)
     if not cfile:
-        bb.fatal('Unable to read SYSLINUX_CFG')
+        raise bb.build.FuncFailed('Unable to read SYSLINUX_CFG')
 
     try:
-        cfgfile = open(cfile, 'w')
+        cfgfile = file(cfile, 'w')
     except OSError:
-        bb.fatal('Unable to open %s' % cfile)
+        raise bb.build.funcFailed('Unable to open %s' % (cfile))
 
     cfgfile.write('# Automatically created by OE\n')
 
@@ -160,7 +160,7 @@ python build_syslinux_cfg () {
 
         overrides = localdata.getVar('OVERRIDES', True)
         if not overrides:
-            bb.fatal('OVERRIDES not defined')
+            raise bb.build.FuncFailed('OVERRIDES not defined')
 
         localdata.setVar('OVERRIDES', label + ':' + overrides)
         bb.data.update_data(localdata)
@@ -172,7 +172,7 @@ python build_syslinux_cfg () {
 
         root= d.getVar('SYSLINUX_ROOT', True)
         if not root:
-            bb.fatal('SYSLINUX_ROOT not defined')
+            raise bb.build.FuncFailed('SYSLINUX_ROOT not defined')
 
         for btype in btypes:
             cfgfile.write('LABEL %s%s\nKERNEL /vmlinuz\n' % (btype[0], label))
@@ -196,4 +196,3 @@ python build_syslinux_cfg () {
 
     cfgfile.close()
 }
-build_syslinux_cfg[dirs] = "${S}"

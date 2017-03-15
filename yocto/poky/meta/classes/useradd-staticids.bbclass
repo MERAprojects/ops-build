@@ -4,7 +4,6 @@ def update_useradd_static_config(d):
     import argparse
     import itertools
     import re
-    import errno
 
     class myArgumentParser( argparse.ArgumentParser ):
         def _print_message(self, message, file=None):
@@ -16,7 +15,7 @@ def update_useradd_static_config(d):
             error(message)
 
         def error(self, message):
-            bb.fatal(message)
+            raise bb.build.FuncFailed(message)
 
     def list_extend(iterable, length, obj = None):
         """Ensure that iterable is the specified length by extending with obj
@@ -31,22 +30,19 @@ def update_useradd_static_config(d):
         are set)."""
         id_table = dict()
         for conf in file_list.split():
-            try:
-                with open(conf, "r") as f:
-                    for line in f:
-                        if line.startswith('#'):
-                            continue
-                        # Make sure there always are at least exp_fields
-                        # elements in the field list. This allows for leaving
-                        # out trailing colons in the files.
-                        fields = list_extend(line.rstrip().split(":"), exp_fields)
-                        if fields[0] not in id_table:
-                            id_table[fields[0]] = fields
-                        else:
-                            id_table[fields[0]] = list(map(lambda x, y: x or y, fields, id_table[fields[0]]))
-            except IOError as e:
-                if e.errno == errno.ENOENT:
-                    pass
+            if os.path.exists(conf):
+                f = open(conf, "r")
+                for line in f:
+                    if line.startswith('#'):
+                        continue
+                    # Make sure there always are at least exp_fields elements in
+                    # the field list. This allows for leaving out trailing
+                    # colons in the files.
+                    fields = list_extend(line.rstrip().split(":"), exp_fields)
+                    if fields[0] not in id_table:
+                        id_table[fields[0]] = fields
+                    else:
+                        id_table[fields[0]] = list(itertools.imap(lambda x, y: x or y, fields, id_table[fields[0]]))
 
         return id_table
 
@@ -54,7 +50,7 @@ def update_useradd_static_config(d):
         # For backwards compatibility we accept "1" in addition to "error"
         if d.getVar('USERADD_ERROR_DYNAMIC', True) == 'error' or d.getVar('USERADD_ERROR_DYNAMIC', True) == '1':
             #bb.error("Skipping recipe %s, package %s which adds %sname %s does not have a static ID defined." % (d.getVar('PN', True),  pkg, type, id))
-            bb.fatal("%s - %s: %sname %s does not have a static ID defined." % (d.getVar('PN', True), pkg, type, id))
+            raise bb.build.FuncFailed("%s - %s: %sname %s does not have a static ID defined." % (d.getVar('PN', True), pkg, type, id))
         elif d.getVar('USERADD_ERROR_DYNAMIC', True) == 'warn':
             bb.warn("%s - %s: %sname %s does not have a static ID defined." % (d.getVar('PN', True), pkg, type, id))
 
@@ -105,9 +101,9 @@ def update_useradd_static_config(d):
             if not param:
                 continue
             try:
-                uaargs = parser.parse_args(re.split('''[ \t]+(?=(?:[^'"]|'[^']*'|"[^"]*")*$)''', param))
+                uaargs = parser.parse_args(re.split('''[ \t]*(?=(?:[^'"]|'[^']*'|"[^"]*")*$)''', param))
             except:
-                bb.fatal("%s: Unable to parse arguments for USERADD_PARAM_%s: '%s'" % (d.getVar('PN', True), pkg, param))
+                raise bb.build.FuncFailed("%s: Unable to parse arguments for USERADD_PARAM_%s: '%s'" % (d.getVar('PN', True), pkg, param))
 
             # Read all passwd files specified in USERADD_UID_TABLES or files/passwd
             # Use the standard passwd layout:
@@ -240,9 +236,9 @@ def update_useradd_static_config(d):
                 continue
             try:
                 # If we're processing multiple lines, we could have left over values here...
-                gaargs = parser.parse_args(re.split('''[ \t]+(?=(?:[^'"]|'[^']*'|"[^"]*")*$)''', param))
+                gaargs = parser.parse_args(re.split('''[ \t]*(?=(?:[^'"]|'[^']*'|"[^"]*")*$)''', param))
             except:
-                bb.fatal("%s: Unable to parse arguments for GROUPADD_PARAM_%s: '%s'" % (d.getVar('PN', True), pkg, param))
+                raise bb.build.FuncFailed("%s: Unable to parse arguments for GROUPADD_PARAM_%s: '%s'" % (d.getVar('PN', True), pkg, param))
 
             # Read all group files specified in USERADD_GID_TABLES or files/group
             # Use the standard group layout:
@@ -284,19 +280,6 @@ def update_useradd_static_config(d):
             newparams.append(newparam)
 
         return ";".join(newparams).strip()
-
-    # The parsing of the current recipe depends on the content of
-    # the files listed in USERADD_UID/GID_TABLES. We need to tell bitbake
-    # about that explicitly to trigger re-parsing and thus re-execution of
-    # this code when the files change.
-    bbpath = d.getVar('BBPATH', True)
-    for varname, default in (('USERADD_UID_TABLES', 'files/passwd'),
-                             ('USERADD_GID_TABLES', 'files/group')):
-        tables = d.getVar(varname, True)
-        if not tables:
-            tables = default
-        for conf_file in tables.split():
-            bb.parse.mark_dependency(d, bb.utils.which(bbpath, conf_file))
 
     # Load and process the users and groups, rewriting the adduser/addgroup params
     useradd_packages = d.getVar('USERADD_PACKAGES', True)

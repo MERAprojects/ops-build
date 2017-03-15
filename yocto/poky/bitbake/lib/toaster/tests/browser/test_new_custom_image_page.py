@@ -25,7 +25,6 @@ from tests.browser.selenium_helpers import SeleniumTestCase
 from orm.models import BitbakeVersion, Release, Project, ProjectLayer, Layer
 from orm.models import Layer_Version, Recipe, CustomImageRecipe
 
-
 class TestNewCustomImagePage(SeleniumTestCase):
     CUSTOM_IMAGE_NAME = 'roopa-doopa'
 
@@ -141,7 +140,7 @@ class TestNewCustomImagePage(SeleniumTestCase):
         self._create_custom_image(self.recipe.name)
         element = self.wait_until_visible('#invalid-name-help')
         self.assertRegexpMatches(element.text.strip(),
-                                 'image with this name already exists')
+                                 'recipe with this name already exists')
 
     def test_new_duplicates_project_image(self):
         """

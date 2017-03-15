@@ -1,3 +1,7 @@
+inherit python-dir
+
+EXTRA_OEMAKE = ""
+
 export STAGING_INCDIR
 export STAGING_LIBDIR
 

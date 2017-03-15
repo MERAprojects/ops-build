@@ -92,9 +92,9 @@ class SQLTable(collections.MutableMapping):
         self._execute("DELETE from %s where key=?;" % self.table, [key])
 
     def __setitem__(self, key, value):
-        if not isinstance(key, str):
+        if not isinstance(key, basestring):
             raise TypeError('Only string keys are supported')
-        elif not isinstance(value, str):
+        elif not isinstance(value, basestring):
             raise TypeError('Only string values are supported')
 
         data = self._execute("SELECT * from %s where key=?;" %
@@ -178,7 +178,7 @@ class PersistData(object):
         """
         Return a list of key + value pairs for a domain
         """
-        return list(self.data[domain].items())
+        return self.data[domain].items()
 
     def getValue(self, domain, key):
         """

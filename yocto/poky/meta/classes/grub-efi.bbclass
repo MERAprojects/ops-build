@@ -45,8 +45,6 @@ efi_populate() {
 		GRUB_IMAGE="bootx64.efi"
 	fi
 	install -m 0644 ${DEPLOY_DIR_IMAGE}/${GRUB_IMAGE} ${DEST}${EFIDIR}
-	EFIPATH=$(echo "${EFIDIR}" | sed 's/\//\\/g')
-	printf 'fs0:%s\%s\n' "$EFIPATH" "$GRUB_IMAGE" >${DEST}/startup.nsh
 
 	install -m 0644 ${GRUB_CFG} ${DEST}${EFIDIR}/grub.cfg
 }
@@ -59,7 +57,7 @@ efi_iso_populate() {
 	cp $iso_dir/${EFIDIR}/* ${EFIIMGDIR}${EFIDIR}
 	cp $iso_dir/vmlinuz ${EFIIMGDIR}
 	EFIPATH=$(echo "${EFIDIR}" | sed 's/\//\\/g')
-	printf 'fs0:%s\%s\n' "$EFIPATH" "$GRUB_IMAGE" > ${EFIIMGDIR}/startup.nsh
+	echo "fs0:${EFIPATH}\\${GRUB_IMAGE}" > ${EFIIMGDIR}/startup.nsh
 	if [ -f "$iso_dir/initrd" ] ; then
 		cp $iso_dir/initrd ${EFIIMGDIR}
 	fi
@@ -90,12 +88,12 @@ python build_efi_cfg() {
 
     cfile = d.getVar('GRUB_CFG', True)
     if not cfile:
-        bb.fatal('Unable to read GRUB_CFG')
+        raise bb.build.FuncFailed('Unable to read GRUB_CFG')
 
     try:
-         cfgfile = open(cfile, 'w')
+         cfgfile = file(cfile, 'w')
     except OSError:
-        bb.fatal('Unable to open %s' % cfile)
+        raise bb.build.funcFailed('Unable to open %s' % (cfile))
 
     cfgfile.write('# Automatically created by OE\n')
 
@@ -114,7 +112,7 @@ python build_efi_cfg() {
 
     root = d.getVar('GRUB_ROOT', True)
     if not root:
-        bb.fatal('GRUB_ROOT not defined')
+        raise bb.build.FuncFailed('GRUB_ROOT not defined')
 
     if gfxserial == "1":
         btypes = [ [ " graphics console", "" ],
@@ -127,7 +125,7 @@ python build_efi_cfg() {
 
         overrides = localdata.getVar('OVERRIDES', True)
         if not overrides:
-            bb.fatal('OVERRIDES not defined')
+            raise bb.build.FuncFailed('OVERRIDES not defined')
 
         for btype in btypes:
             localdata.setVar('OVERRIDES', label + ':' + overrides)
@@ -146,8 +144,7 @@ python build_efi_cfg() {
 
             if append:
                 append = replace_rootfs_uuid(d, append)
-                cfgfile.write(' %s' % (append))
-
+                cfgfile.write('%s' % (append))
             cfgfile.write(' %s' % btype[1])
             cfgfile.write('\n')
 

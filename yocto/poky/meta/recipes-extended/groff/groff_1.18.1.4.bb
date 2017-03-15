@@ -13,7 +13,6 @@ SRC_URI = "${GNU_MIRROR}/${BPN}/old/${BP}.tar.gz \
           file://man-local.patch \
           file://mdoc-local.patch \
           file://groff-1.18.1.4-fix-bindir.patch \
-          file://fix-narrowing-conversion-error.patch \
 " 
 
 inherit autotools texinfo

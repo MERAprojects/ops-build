@@ -20,9 +20,6 @@ python do_package_ipk () {
     import re, copy
     import textwrap
     import subprocess
-    import collections
-
-    oldcwd = os.getcwd()
 
     workdir = d.getVar('WORKDIR', True)
     outdir = d.getVar('PKGWRITEDIRIPK', True)
@@ -108,7 +105,7 @@ python do_package_ipk () {
             ctrlfile = open(os.path.join(controldir, 'control'), 'w')
         except OSError:
             bb.utils.unlockfile(lf)
-            bb.fatal("unable to open control file for writing")
+            raise bb.build.FuncFailed("unable to open control file for writing.")
 
         fields = []
         pe = d.getVar('PKGE', True)
@@ -162,7 +159,7 @@ python do_package_ipk () {
             (type, value, traceback) = sys.exc_info()
             ctrlfile.close()
             bb.utils.unlockfile(lf)
-            bb.fatal("Missing field for ipk generation: %s" % value)
+            raise bb.build.FuncFailed("Missing field for ipk generation: %s" % value)
         # more fields
 
         custom_fields_chunk = get_package_additional_metadata("ipk", localdata)
@@ -193,7 +190,6 @@ python do_package_ipk () {
         debian_cmp_remap(rsuggests)
         # Deliberately drop version information here, not wanted/supported by ipk
         rprovides = dict.fromkeys(bb.utils.explode_dep_versions2(localdata.getVar("RPROVIDES", True) or ""), [])
-        rprovides = collections.OrderedDict(sorted(rprovides.items(), key=lambda x: x[0]))
         debian_cmp_remap(rprovides)
         rreplaces = bb.utils.explode_dep_versions2(localdata.getVar("RREPLACES", True) or "")
         debian_cmp_remap(rreplaces)
@@ -226,10 +222,10 @@ python do_package_ipk () {
                 scriptfile = open(os.path.join(controldir, script), 'w')
             except OSError:
                 bb.utils.unlockfile(lf)
-                bb.fatal("unable to open %s script file for writing" % script)
+                raise bb.build.FuncFailed("unable to open %s script file for writing." % script)
             scriptfile.write(scriptvar)
             scriptfile.close()
-            os.chmod(os.path.join(controldir, script), 0o755)
+            os.chmod(os.path.join(controldir, script), 0755)
 
         conffiles_str = ' '.join(get_conffiles(pkg, d))
         if conffiles_str:
@@ -237,7 +233,7 @@ python do_package_ipk () {
                 conffiles = open(os.path.join(controldir, 'conffiles'), 'w')
             except OSError:
                 bb.utils.unlockfile(lf)
-                bb.fatal("unable to open conffiles for writing")
+                raise bb.build.FuncFailed("unable to open conffiles for writing.")
             for f in conffiles_str.split():
                 if os.path.exists(oe.path.join(root, f)):
                     conffiles.write('%s\n' % f)
@@ -245,10 +241,10 @@ python do_package_ipk () {
 
         os.chdir(basedir)
         ret = subprocess.call("PATH=\"%s\" %s %s %s" % (localdata.getVar("PATH", True),
-                                                          d.getVar("OPKGBUILDCMD", True), pkg, pkgoutdir), shell=True)
+                                                          d.getVar("OPKGBUILDCMD",1), pkg, pkgoutdir), shell=True)
         if ret != 0:
             bb.utils.unlockfile(lf)
-            bb.fatal("opkg-build execution failed")
+            raise bb.build.FuncFailed("opkg-build execution failed")
 
         if d.getVar('IPK_SIGN_PACKAGES', True) == '1':
             ipkver = "%s-%s" % (d.getVar('PKGV', True), d.getVar('PKGR', True))
@@ -258,7 +254,6 @@ python do_package_ipk () {
         cleanupcontrol(root)
         bb.utils.unlockfile(lf)
 
-    os.chdir(oldcwd)
 }
 # Otherwise allarch packages may change depending on override configuration
 do_package_ipk[vardepsexclude] = "OVERRIDES"

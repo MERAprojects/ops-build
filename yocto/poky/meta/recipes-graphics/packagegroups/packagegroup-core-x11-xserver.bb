@@ -3,6 +3,7 @@
 #
 
 SUMMARY = "X11 display server"
+LICENSE = "MIT"
 PR = "r40"
 
 PACKAGE_ARCH = "${MACHINE_ARCH}"

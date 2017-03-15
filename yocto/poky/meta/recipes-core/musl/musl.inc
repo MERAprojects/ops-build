@@ -17,13 +17,10 @@ TOOLCHAIN_OPTIONS = " --sysroot=${STAGING_DIR_TCBOOTSTRAP}"
 INHIBIT_DEFAULT_DEPS = "1"
 
 STAGINGCC = "gcc-cross-initial-${TARGET_ARCH}"
-STAGINGCC_class-nativesdk = "gcc-crosssdk-initial-${SDK_SYS}"
+STAGINGCC_class-nativesdk = "gcc-crosssdk-initial-${TARGET_ARCH}"
 
 
 FILES_SOLIBSDEV = ""
 FILES_${PN} += "${libdir}/lib*${SOLIBSDEV}"
 INSANE_SKIP_${PN} = "dev-so"
 
-# Doesn't compile in MIPS16e mode due to use of hand-written
-# assembly
-MIPS_INSTRUCTION_SET = "mips"

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # ex:ts=4:sw=4:sts=4:et
 # -*- tab-width: 4; c-basic-offset: 4; indent-tabs-mode: nil -*-
 
@@ -17,6 +17,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
 
+from __future__ import print_function
 import os
 import sys
 import getopt
@@ -24,7 +25,7 @@ import shutil
 import re
 import warnings
 import subprocess
-import argparse
+from optparse import OptionParser
 
 scripts_path = os.path.abspath(os.path.dirname(os.path.abspath(sys.argv[0])))
 lib_path = scripts_path + '/lib'
@@ -37,8 +38,6 @@ bitbakepath = scriptpath.add_bitbake_lib_path()
 if not bitbakepath:
     sys.stderr.write("Unable to find bitbake by searching parent directory of this script or PATH\n")
     sys.exit(1)
-scriptpath.add_oe_lib_path()
-import argparse_oe
 
 import bb.siggen
 import bb.process
@@ -119,7 +118,7 @@ def print_added(d_new = None, d_old = None):
     Print the newly added tasks
     """
     added = {}
-    for k in list(d_new.keys()):
+    for k in d_new.keys():
         if k not in d_old:
             # Add the new one to added dict, and remove it from
             # d_new, so the remaining ones are the changed ones
@@ -154,7 +153,7 @@ def print_vrchanged(d_new = None, d_old = None, vr = None):
     """
     pvchanged = {}
     counter = 0
-    for k in list(d_new.keys()):
+    for k in d_new.keys():
         if d_new.get(k).get(vr) != d_old.get(k).get(vr):
             counter += 1
             pn, task = split_pntask(k)
@@ -220,7 +219,9 @@ def main():
     3) Use bb.siggen.compare_sigfiles to diff the old and new stamps
     """
 
-    parser = argparse_oe.ArgumentParser(usage = """%(prog)s [options] [package ...]
+    parser = OptionParser(
+        version = "1.0",
+        usage = """%prog [options] [package ...]
 print what will be done between the current and last builds, for example:
 
     $ bitbake core-image-sato
@@ -235,9 +236,17 @@ Note:
     The "nostamp" task is not included.
 """
 )
-    parser.add_argument("recipe", help="recipe to check")
-    parser.add_argument("-v", "--verbose", help = "print the verbose changes", action = "store_true")
-    args = parser.parse_args()
+    parser.add_option("-v", "--verbose", help = "print the verbose changes",
+               action = "store_true", dest = "verbose")
+
+    options, args = parser.parse_args(sys.argv)
+
+    verbose = options.verbose
+
+    if len(args) != 2:
+        parser.error("Incorrect number of arguments")
+    else:
+        recipe = args[1]
 
     # Get the STAMPS_DIR
     print("Figuring out the STAMPS_DIR ...")
@@ -247,7 +256,7 @@ Note:
     except:
         raise
     if not stampsdir:
-        print("ERROR: No STAMPS_DIR found for '%s'" % args.recipe, file=sys.stderr)
+        print("ERROR: No STAMPS_DIR found for '%s'" % recipe, file=sys.stderr)
         return 2
     stampsdir = stampsdir.rstrip("\n")
     if not os.path.isdir(stampsdir):
@@ -263,7 +272,7 @@ Note:
     try:
         # Generate the new stamps dir
         print("Generating the new stamps ... (need several minutes)")
-        cmdline = "STAMPS_DIR=%s bitbake -S none %s" % (new_stampsdir, args.recipe)
+        cmdline = "STAMPS_DIR=%s bitbake -S none %s" % (new_stampsdir, recipe)
         # FIXME
         # The "bitbake -S" may fail, not fatal error, the stamps will still
         # be generated, this might be a bug of "bitbake -S".
@@ -278,7 +287,7 @@ Note:
 
         # Remove the same one from both stamps.
         cnt_unchanged = 0
-        for k in list(new_dict.keys()):
+        for k in new_dict.keys():
             if k in old_dict:
                 cnt_unchanged += 1
                 del(new_dict[k])
@@ -301,17 +310,17 @@ Note:
         # PV (including PE) and PR changed
         # Let the bb.siggen handle them if verbose
         cnt_rv = {}
-        if not args.verbose:
+        if not verbose:
             for i in ('pv', 'pr'):
                cnt_rv[i] = print_vrchanged(new_recon, old_recon, i)
 
         # Dependencies changed (use bitbake-diffsigs)
-        cnt_dep = print_depchanged(new_recon, old_recon, args.verbose)
+        cnt_dep = print_depchanged(new_recon, old_recon, verbose)
 
         total_changed = cnt_added + (cnt_rv.get('pv') or 0) + (cnt_rv.get('pr') or 0) + cnt_dep
 
         print("\n=== Summary: (%s changed, %s unchanged)" % (total_changed, cnt_unchanged))
-        if args.verbose:
+        if verbose:
             print("Newly added: %s\nDependencies changed: %s\n" % \
                 (cnt_added, cnt_dep))
         else:

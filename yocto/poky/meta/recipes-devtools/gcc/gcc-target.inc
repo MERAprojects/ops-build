@@ -42,10 +42,6 @@ FILES_${PN} = "\
     ${gcclibdir}/${TARGET_SYS}/${BINV}/include-fixed \
 "
 INSANE_SKIP_${PN} += "dev-so"
-RRECOMMENDS_${PN} += "\
-    libssp \
-    libssp-dev \
-"
 
 FILES_${PN}-dev = "\
     ${gcclibdir}/${TARGET_SYS}/${BINV}/lib*${SOLIBSDEV} \
@@ -73,18 +69,9 @@ FILES_g77-symlinks = "\
     ${bindir}/g77 \
     ${bindir}/f77 \
 "
-RRECOMMENDS_g77 = "\
-    libg2c \
-    libg2c-dev \
-"
-
 FILES_gfortran = "\
     ${bindir}/${TARGET_PREFIX}gfortran \
     ${libexecdir}/gcc/${TARGET_SYS}/${BINV}/f951 \
-"
-RRECOMMENDS_gfortran = "\
-    libquadmath \
-    libquadmath-dev \
 "
 FILES_gfortran-symlinks = "\
     ${bindir}/gfortran \
@@ -110,12 +97,6 @@ FILES_g++ = "\
 FILES_g++-symlinks = "\
     ${bindir}/c++ \
     ${bindir}/g++ \
-"
-RRECOMMENDS_g++ = "\
-    libstdc++ \
-    libstdc++-dev \
-    libatomic \
-    libatomic-dev \
 "
 
 FILES_${PN}-doc = "\
@@ -223,4 +204,6 @@ do_install_append () {
 # and builds track file dependencies (e.g. perl and its makedepends code).
 # For determinism we don't install this ever and rely on the copy from gcc-cross.
 # [YOCTO #7287]
-SYSROOT_DIRS_BLACKLIST += "${libdir}/gcc"
+sysroot_stage_dirs_append () {
+	rm -rf $to${libdir}/gcc
+}

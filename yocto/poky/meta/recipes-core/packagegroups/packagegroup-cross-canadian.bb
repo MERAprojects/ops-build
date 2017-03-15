@@ -1,5 +1,6 @@
 SUMMARY = "Host SDK package for cross canadian toolchain"
 PN = "packagegroup-cross-canadian-${MACHINE}"
+LICENSE = "MIT"
 
 inherit cross-canadian packagegroup
 

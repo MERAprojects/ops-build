@@ -5,6 +5,7 @@
 SUMMARY = "Self-hosting"
 DESCRIPTION = "Packages required to run the build system"
 PR = "r13"
+LICENSE = "MIT"
 
 inherit packagegroup  distro_features_check
 # rdepends on libx11-dev
@@ -28,6 +29,9 @@ RDEPENDS_packagegroup-self-hosted = "\
     "
 
 RDEPENDS_packagegroup-self-hosted-host-tools = "\
+    connman \
+    connman-plugin-ethernet \
+    dhcp-client \
     e2fsprogs \
     e2fsprogs-e2fsck \
     e2fsprogs-mke2fs \
@@ -121,6 +125,8 @@ RDEPENDS_packagegroup-self-hosted-extended = "\
     groff \
     gzip \
     settings-daemon \
+    hicolor-icon-theme \
+    sato-icon-theme \
     libaio \
     libusb1 \
     libxml2 \
@@ -147,11 +153,11 @@ RDEPENDS_packagegroup-self-hosted-extended = "\
     perl-modules \
     perl-pod \
     python \
-    python-modules \
+    python-compiler \
     python-git \
-    python3 \
-    python3-modules \
-    python3-git \
+    python-misc \
+    python-modules \
+    python-rpm \
     quota \
     readline \
     rpm \
@@ -185,10 +191,10 @@ RDEPENDS_packagegroup-self-hosted-graphics = "\
     libsdl \
     libsdl-dev \
     libx11-dev \
-    adwaita-icon-theme \
+    gtk-theme-clearlooks \
     xdg-utils \
     epiphany \
-    l3afpad \
+    leafpad \
     pcmanfm \
     vte \
     "

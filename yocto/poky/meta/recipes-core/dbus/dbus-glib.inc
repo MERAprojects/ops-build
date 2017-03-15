@@ -15,7 +15,7 @@ SRC_URI = "http://dbus.freedesktop.org/releases/dbus-glib/dbus-glib-${PV}.tar.gz
            file://test-install-makefile.patch \
 "
 
-inherit autotools pkgconfig gettext bash-completion gtk-doc
+inherit autotools pkgconfig gettext bash-completion
 
 #default disable regression tests, some unit test code in non testing code
 #PACKAGECONFIG_pn-${PN} = "tests" enable regression tests local.conf

@@ -24,7 +24,7 @@ from wic.conf import configmgr
 from wic.plugin import pluginmgr
 
 
-class Creator():
+class Creator(object):
     """${name}: create an image
 
     Usage:
@@ -41,7 +41,7 @@ class Creator():
 
         # get cmds from pluginmgr
         # mix-in do_subcmd interface
-        for subcmd, klass in pluginmgr.get_plugins('imager').items():
+        for subcmd, klass in pluginmgr.get_plugins('imager').iteritems():
             if not hasattr(klass, 'do_create'):
                 msger.warning("Unsupported subcmd: %s" % subcmd)
                 continue
@@ -69,7 +69,6 @@ class Creator():
         optparser.add_option('', '--tmpfs', action='store_true', dest='enabletmpfs',
                              help='Setup tmpdir as tmpfs to accelerate, experimental'
                                   ' feature, use it if you have more than 4G memory')
-        optparser.add_option('', '--bmap', action='store_true', help='generate .bmap')
         return optparser
 
     def postoptparse(self, options):

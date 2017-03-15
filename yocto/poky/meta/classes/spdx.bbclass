@@ -219,13 +219,14 @@ def hash_string(data):
 def run_fossology(foss_command, full_spdx):
     import string, re
     import subprocess
-
-    try:
-        foss_output = subprocess.check_output(foss_command.split(),
-                stderr=subprocess.STDOUT).decode('utf-8')
-    except subprocess.CalledProcessError as e:
+    
+    p = subprocess.Popen(foss_command.split(),
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    foss_output, foss_error = p.communicate()
+    if p.returncode != 0:
         return None
 
+    foss_output = unicode(foss_output, "utf-8")
     foss_output = string.replace(foss_output, '\r', '')
 
     # Package info

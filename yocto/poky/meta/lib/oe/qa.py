@@ -1,4 +1,4 @@
-import os, struct, mmap
+import os, struct
 
 class NotELFFileError(Exception):
     pass
@@ -23,9 +23,9 @@ class ELFFile:
     EV_CURRENT   = 1
 
     # possible values for EI_DATA
-    EI_DATA_NONE  = 0
-    EI_DATA_LSB  = 1
-    EI_DATA_MSB  = 2
+    ELFDATANONE  = 0
+    ELFDATA2LSB  = 1
+    ELFDATA2MSB  = 2
 
     PT_INTERP = 3
 
@@ -34,71 +34,72 @@ class ELFFile:
             #print "'%x','%x' %s" % (ord(expectation), ord(result), self.name)
             raise NotELFFileError("%s is not an ELF" % self.name)
 
-    def __init__(self, name):
+    def __init__(self, name, bits = 0):
         self.name = name
+        self.bits = bits
         self.objdump_output = {}
 
-    # Context Manager functions to close the mmap explicitly
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.data.close()
-
     def open(self):
-        with open(self.name, "rb") as f:
-            try:
-                self.data = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
-            except ValueError:
-                # This means the file is empty
-                raise NotELFFileError("%s is empty" % self.name)
+        if not os.path.isfile(self.name):
+            raise NotELFFileError("%s is not a normal file" % self.name)
 
-        # Check the file has the minimum number of ELF table entries
+        self.file = file(self.name, "r")
+        # Read 4k which should cover most of the headers we're after
+        self.data = self.file.read(4096)
+
         if len(self.data) < ELFFile.EI_NIDENT + 4:
             raise NotELFFileError("%s is not an ELF" % self.name)
 
-        # ELF header
-        self.my_assert(self.data[0], 0x7f)
-        self.my_assert(self.data[1], ord('E'))
-        self.my_assert(self.data[2], ord('L'))
-        self.my_assert(self.data[3], ord('F'))
-        if self.data[ELFFile.EI_CLASS] == ELFFile.ELFCLASS32:
-            self.bits = 32
-        elif self.data[ELFFile.EI_CLASS] == ELFFile.ELFCLASS64:
-            self.bits = 64
+        self.my_assert(self.data[0], chr(0x7f) )
+        self.my_assert(self.data[1], 'E')
+        self.my_assert(self.data[2], 'L')
+        self.my_assert(self.data[3], 'F')
+        if self.bits == 0:
+            if self.data[ELFFile.EI_CLASS] == chr(ELFFile.ELFCLASS32):
+                self.bits = 32
+            elif self.data[ELFFile.EI_CLASS] == chr(ELFFile.ELFCLASS64):
+                self.bits = 64
+            else:
+                # Not 32-bit or 64.. lets assert
+                raise NotELFFileError("ELF but not 32 or 64 bit.")
+        elif self.bits == 32:
+            self.my_assert(self.data[ELFFile.EI_CLASS], chr(ELFFile.ELFCLASS32))
+        elif self.bits == 64:
+            self.my_assert(self.data[ELFFile.EI_CLASS], chr(ELFFile.ELFCLASS64))
         else:
-            # Not 32-bit or 64.. lets assert
-            raise NotELFFileError("ELF but not 32 or 64 bit.")
-        self.my_assert(self.data[ELFFile.EI_VERSION], ELFFile.EV_CURRENT)
+            raise NotELFFileError("Must specify unknown, 32 or 64 bit size.")
+        self.my_assert(self.data[ELFFile.EI_VERSION], chr(ELFFile.EV_CURRENT) )
 
-        self.endian = self.data[ELFFile.EI_DATA]
-        if self.endian not in (ELFFile.EI_DATA_LSB, ELFFile.EI_DATA_MSB):
-            raise NotELFFileError("Unexpected EI_DATA %x" % self.endian)
+        self.sex = self.data[ELFFile.EI_DATA]
+        if self.sex == chr(ELFFile.ELFDATANONE):
+            raise NotELFFileError("self.sex == ELFDATANONE")
+        elif self.sex == chr(ELFFile.ELFDATA2LSB):
+            self.sex = "<"
+        elif self.sex == chr(ELFFile.ELFDATA2MSB):
+            self.sex = ">"
+        else:
+            raise NotELFFileError("Unknown self.sex")
 
     def osAbi(self):
-        return self.data[ELFFile.EI_OSABI]
+        return ord(self.data[ELFFile.EI_OSABI])
 
     def abiVersion(self):
-        return self.data[ELFFile.EI_ABIVERSION]
+        return ord(self.data[ELFFile.EI_ABIVERSION])
 
     def abiSize(self):
         return self.bits
 
     def isLittleEndian(self):
-        return self.endian == ELFFile.EI_DATA_LSB
+        return self.sex == "<"
 
     def isBigEndian(self):
-        return self.endian == ELFFile.EI_DATA_MSB
-
-    def getStructEndian(self):
-        return {ELFFile.EI_DATA_LSB: "<",
-                ELFFile.EI_DATA_MSB: ">"}[self.endian]
+        return self.sex == ">"
 
     def getShort(self, offset):
-        return struct.unpack_from(self.getStructEndian() + "H", self.data, offset)[0]
+        return struct.unpack_from(self.sex+"H", self.data, offset)[0]
 
     def getWord(self, offset):
-        return struct.unpack_from(self.getStructEndian() + "i", self.data, offset)[0]
+        return struct.unpack_from(self.sex+"i", self.data, offset)[0]
 
     def isDynamic(self):
         """
@@ -117,7 +118,7 @@ class ELFFile:
 
     def machine(self):
         """
-        We know the endian stored in self.endian and we
+        We know the sex stored in self.sex and we
         know the position
         """
         return self.getShort(ELFFile.E_MACHINE)
@@ -143,29 +144,8 @@ class ELFFile:
             bb.note("%s %s %s failed: %s" % (objdump, cmd, self.name, e))
             return ""
 
-def elf_machine_to_string(machine):
-    """
-    Return the name of a given ELF e_machine field or the hex value as a string
-    if it isn't recognised.
-    """
-    try:
-        return {
-            0x02: "SPARC",
-            0x03: "x86",
-            0x08: "MIPS",
-            0x14: "PowerPC",
-            0x28: "ARM",
-            0x2A: "SuperH",
-            0x32: "IA-64",
-            0x3E: "x86-64",
-            0xB7: "AArch64"
-        }[machine]
-    except:
-        return "Unknown (%s)" % repr(machine)
-
 if __name__ == "__main__":
     import sys
-
-    with ELFFile(sys.argv[1]) as elf:
-        elf.open()
-        print(elf.isDynamic())
+    elf = ELFFile(sys.argv[1])
+    elf.open()
+    print elf.isDynamic()

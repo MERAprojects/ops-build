@@ -55,7 +55,6 @@ class LayersTypeAhead(ToasterTypeAhead):
                 'vcs_url' : layer_version.layer.vcs_url,
                 'vcs_reference' : vcs_reference,
                 'detail' : detail,
-                'local_source_dir' : layer_version.layer.local_source_dir,
             }
 
             results.append(needed_fields)

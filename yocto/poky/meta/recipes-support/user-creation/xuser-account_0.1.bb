@@ -21,6 +21,7 @@ do_install() {
 FILES_${PN} = "${sysconfdir}/dbus-1/system.d/system-xuser.conf"
 
 USERADD_PACKAGES = "${PN}"
+GROUPADD_PARAM_${PN} = "--system shutdown"
 USERADD_PARAM_${PN} = "--create-home \
                        --groups video,tty,audio,input,shutdown,disk \
                        --user-group xuser"

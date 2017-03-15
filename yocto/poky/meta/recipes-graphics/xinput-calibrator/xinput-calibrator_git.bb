@@ -34,5 +34,5 @@ do_install_append() {
 }
 
 FILES_${PN} += "${sysconfdir}/xdg/autostart"
-RDEPENDS_${PN} = "xinput formfactor xrandr"
+RDEPENDS_${PN} = "xinput formfactor"
 RRECOMMENDS_${PN} = "pointercal-xinput"

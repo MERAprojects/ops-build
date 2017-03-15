@@ -17,7 +17,7 @@ class CmdError(RuntimeError):
         self.msg = msg
 
     def __str__(self):
-        if not isinstance(self.command, str):
+        if not isinstance(self.command, basestring):
             cmd = subprocess.list2cmdline(self.command)
         else:
             cmd = self.command
@@ -97,8 +97,6 @@ def _logged_communicate(pipe, log, input, extrafiles):
     try:
         while pipe.poll() is None:
             rlist = rin
-            stdoutbuf = b""
-            stderrbuf = b""
             try:
                 r,w,e = select.select (rlist, [], [], 1)
             except OSError as e:
@@ -106,26 +104,16 @@ def _logged_communicate(pipe, log, input, extrafiles):
                     raise
 
             if pipe.stdout in r:
-                data = stdoutbuf + pipe.stdout.read()
-                if data is not None and len(data) > 0:
-                    try:
-                        data = data.decode("utf-8")
-                        outdata.append(data)
-                        log.write(data)
-                        stdoutbuf = b""
-                    except UnicodeDecodeError:
-                        stdoutbuf = data
+                data = pipe.stdout.read()
+                if data is not None:
+                    outdata.append(data)
+                    log.write(data)
 
             if pipe.stderr in r:
-                data = stderrbuf + pipe.stderr.read()
-                if data is not None and len(data) > 0:
-                    try:
-                        data = data.decode("utf-8")
-                        errdata.append(data)
-                        log.write(data)
-                        stderrbuf = b""
-                    except UnicodeDecodeError:
-                        stderrbuf = data
+                data = pipe.stderr.read()
+                if data is not None:
+                    errdata.append(data)
+                    log.write(data)
 
             readextras(r)
 
@@ -147,7 +135,7 @@ def run(cmd, input=None, log=None, extrafiles=None, **options):
     if not extrafiles:
         extrafiles = []
 
-    if isinstance(cmd, str) and not "shell" in options:
+    if isinstance(cmd, basestring) and not "shell" in options:
         options["shell"] = True
 
     try:
@@ -162,10 +150,6 @@ def run(cmd, input=None, log=None, extrafiles=None, **options):
         stdout, stderr = _logged_communicate(pipe, log, input, extrafiles)
     else:
         stdout, stderr = pipe.communicate(input)
-        if stdout:
-            stdout = stdout.decode("utf-8")
-        if stderr:
-            stderr = stderr.decode("utf-8")
 
     if pipe.returncode != 0:
         raise ExecutionError(cmd, pipe.returncode, stdout, stderr)

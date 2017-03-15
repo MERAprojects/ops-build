@@ -8,7 +8,7 @@ def runstrip(arg):
     # 8 - shared library
     # 16 - kernel module
 
-    import stat, subprocess
+    import commands, stat, subprocess
 
     (file, elftype, strip) = arg
 
@@ -64,8 +64,8 @@ def filedeprunner(arg):
 
     def process_deps(pipe, pkg, pkgdest, provides, requires):
         for line in pipe:
-            f = line.decode("utf-8").split(" ", 1)[0].strip()
-            line = line.decode("utf-8").split(" ", 1)[1].strip()
+            f = line.split(" ", 1)[0].strip()
+            line = line.split(" ", 1)[1].strip()
 
             if line.startswith("Requires:"):
                 i = requires
@@ -114,12 +114,7 @@ def read_shlib_providers(d):
             m = list_re.match(file)
             if m:
                 dep_pkg = m.group(1)
-                try:
-                    fd = open(os.path.join(dir, file))
-                except IOError:
-                    # During a build unrelated shlib files may be deleted, so
-                    # handle files disappearing between the listdirs and open.
-                    continue
+                fd = open(os.path.join(dir, file))
                 lines = fd.readlines()
                 fd.close()
                 for l in lines:

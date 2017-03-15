@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # ex:ts=4:sw=4:sts=4:et
 # -*- tab-width: 4; c-basic-offset: 4; indent-tabs-mode: nil -*-
 #
@@ -29,14 +29,14 @@ import warnings
 sys.path.insert(0, os.path.join(os.path.abspath(os.path.dirname(sys.argv[0])), '../lib'))
 from bb.cache import CoreRecipeInfo
 
-import pickle as pickle
+import cPickle as pickle
 
 def main(argv=None):
     """
     Get the mapping for the target recipe.
     """
     if len(argv) != 1:
-        print("Error, need one argument!", file=sys.stderr)
+        print >>sys.stderr, "Error, need one argument!"
         return 2
 
     cachefile = argv[0]
@@ -56,7 +56,7 @@ def main(argv=None):
                     continue
 
                 # 1.0 is the default version for a no PV recipe.
-                if "pv" in val.__dict__:
+                if val.__dict__.has_key("pv"):
                     pv = val.pv
                 else:
                     pv = "1.0"

@@ -16,11 +16,11 @@ def packages(features, d):
             yield pkg
 
 def required_packages(features, d):
-    req = [feature for feature in features if not is_optional(feature, d)]
+    req = filter(lambda feature: not is_optional(feature, d), features)
     return packages(req, d)
 
 def optional_packages(features, d):
-    opt = [feature for feature in features if is_optional(feature, d)]
+    opt = filter(lambda feature: is_optional(feature, d), features)
     return packages(opt, d)
 
 def active_packages(features, d):

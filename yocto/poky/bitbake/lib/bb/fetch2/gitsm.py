@@ -43,10 +43,10 @@ class GitSM(Git):
         """
         return ud.type in ['gitsm']
 
-    def uses_submodules(self, ud, d, wd):
+    def uses_submodules(self, ud, d):
         for name in ud.names:
             try:
-                runfetchcmd("%s show %s:.gitmodules" % (ud.basecmd, ud.revisions[name]), d, quiet=True, workdir=wd)
+                runfetchcmd("%s show %s:.gitmodules" % (ud.basecmd, ud.revisions[name]), d, quiet=True)
                 return True
             except bb.fetch.FetchError:
                 pass
@@ -107,25 +107,28 @@ class GitSM(Git):
         os.mkdir(tmpclonedir)
         os.rename(ud.clonedir, gitdir)
         runfetchcmd("sed " + gitdir + "/config -i -e 's/bare.*=.*true/bare = false/'", d)
-        runfetchcmd(ud.basecmd + " reset --hard", d, workdir=tmpclonedir)
-        runfetchcmd(ud.basecmd + " checkout " + ud.revisions[ud.names[0]], d, workdir=tmpclonedir)
-        runfetchcmd(ud.basecmd + " submodule update --init --recursive", d, workdir=tmpclonedir)
+        os.chdir(tmpclonedir)
+        runfetchcmd(ud.basecmd + " reset --hard", d)
+        runfetchcmd(ud.basecmd + " checkout " + ud.revisions[ud.names[0]], d)
+        runfetchcmd(ud.basecmd + " submodule update --init --recursive", d)
         self._set_relative_paths(tmpclonedir)
-        runfetchcmd("sed " + gitdir + "/config -i -e 's/bare.*=.*false/bare = true/'", d, workdir=tmpclonedir)
+        runfetchcmd("sed " + gitdir + "/config -i -e 's/bare.*=.*false/bare = true/'", d)
         os.rename(gitdir, ud.clonedir,)
         bb.utils.remove(tmpclonedir, True)
 
     def download(self, ud, d):
         Git.download(self, ud, d)
 
-        submodules = self.uses_submodules(ud, d, ud.clonedir)
+        os.chdir(ud.clonedir)
+        submodules = self.uses_submodules(ud, d)
         if submodules:
             self.update_submodules(ud, d)
 
     def unpack(self, ud, destdir, d):
         Git.unpack(self, ud, destdir, d)
         
-        submodules = self.uses_submodules(ud, d, ud.destdir)
+        os.chdir(ud.destdir)
+        submodules = self.uses_submodules(ud, d)
         if submodules:
-            runfetchcmd(ud.basecmd + " checkout " + ud.revisions[ud.names[0]], d, workdir=ud.destdir)
-            runfetchcmd(ud.basecmd + " submodule update --init --recursive", d, workdir=ud.destdir)
+            runfetchcmd(ud.basecmd + " checkout " + ud.revisions[ud.names[0]], d)
+            runfetchcmd(ud.basecmd + " submodule update --init --recursive", d)

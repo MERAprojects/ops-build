@@ -10,7 +10,7 @@ HOMEPAGE = "http://mesa3d.org"
 BUGTRACKER = "https://bugs.freedesktop.org"
 SECTION = "x11"
 LICENSE = "MIT"
-LIC_FILES_CHKSUM = "file://docs/license.html;md5=899fbe7e42d494c7c8c159c7001693d5"
+LIC_FILES_CHKSUM = "file://docs/license.html;md5=6a23445982a7a972ac198e93cc1cb3de"
 
 PE = "2"
 
@@ -79,9 +79,6 @@ EXCLUDE_FROM_WORLD = "1"
 # Remove the mesa dependency on mesa-dev, as mesa is empty
 RDEPENDS_${PN}-dev = ""
 
-# Add dependency so that GLES3 header don't need to be added manually
-RDEPENDS_libgles2-mesa-dev += "libgles3-mesa-dev"
-
 PACKAGES =+ "libegl-mesa libegl-mesa-dev \
              libosmesa libosmesa-dev \
              libgl-mesa libgl-mesa-dev \
@@ -145,17 +142,16 @@ python mesa_populate_packages() {
         d.setVar("RREPLACES_%s" % pkg, pkg.replace("mesa", "mesa-dri", 1))
 
     import re
-    dri_drivers_root = oe.path.join(d.getVar('PKGD', True), d.getVar('libdir', True), "dri")
-    if os.path.isdir(dri_drivers_root):
-        dri_pkgs = os.listdir(dri_drivers_root)
-        lib_name = d.expand("${MLPREFIX}mesa-megadriver")
-        for p in dri_pkgs:
-            m = re.match('^(.*)_dri\.so$', p)
-            if m:
-                pkg_name = " ${MLPREFIX}mesa-driver-%s" % legitimize_package_name(m.group(1))
-                d.appendVar("RPROVIDES_%s" % lib_name, pkg_name)
-                d.appendVar("RCONFLICTS_%s" % lib_name, pkg_name)
-                d.appendVar("RREPLACES_%s" % lib_name, pkg_name)
+    dri_drivers_root = os.path.join(d.getVar('libdir', True), "dri")
+    dri_pkgs = os.listdir(d.getVar('PKGD', True) + dri_drivers_root)
+    lib_name = d.expand("${MLPREFIX}mesa-megadriver")
+    for p in dri_pkgs:
+        m = re.match('^(.*)_dri\.so$', p)
+        if m:
+            pkg_name = " ${MLPREFIX}mesa-driver-%s" % legitimize_package_name(m.group(1))
+            d.appendVar("RPROVIDES_%s" % lib_name, pkg_name)
+            d.appendVar("RCONFLICTS_%s" % lib_name, pkg_name)
+            d.appendVar("RREPLACES_%s" % lib_name, pkg_name)
 
     pipe_drivers_root = os.path.join(d.getVar('libdir', True), "gallium-pipe")
     do_split_packages(d, pipe_drivers_root, '^pipe_(.*)\.so$', 'mesa-driver-pipe-%s', 'Mesa %s pipe driver', extra_depends='')

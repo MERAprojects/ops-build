@@ -1,6 +1,6 @@
 DEFAULTTUNE ?= "aarch64"
 
-require conf/machine/include/arm/arch-armv7ve.inc
+require conf/machine/include/arm/arch-armv7a.inc
 
 TUNEVALID[aarch64] = "Enable instructions for aarch64"
 

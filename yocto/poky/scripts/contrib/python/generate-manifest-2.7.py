@@ -97,7 +97,7 @@ class MakefileMaker:
         # generate package variables
         #
 
-        for name, data in sorted(self.packages.items()):
+        for name, data in sorted(self.packages.iteritems()):
             desc, deps, files = data
 
             #
@@ -130,7 +130,7 @@ class MakefileMaker:
         self.out( 'SUMMARY_${PN}-modules="All Python modules"' )
         line = 'RDEPENDS_${PN}-modules="'
 
-        for name, data in sorted(self.packages.items()):
+        for name, data in sorted(self.packages.iteritems()):
             if name not in ['${PN}-dev', '${PN}-distutils-staticdev']:
                 line += "%s " % name
 
@@ -153,7 +153,7 @@ if __name__ == "__main__":
             os.unlink(sys.argv[1])
         except Exception:
             sys.exc_clear()
-        outfile = open( sys.argv[1], "w" )
+        outfile = file( sys.argv[1], "w" )
     else:
         outfile = sys.stdout
 

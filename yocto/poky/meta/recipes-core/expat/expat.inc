@@ -4,8 +4,9 @@ HOMEPAGE = "http://expat.sourceforge.net/"
 SECTION = "libs"
 LICENSE = "MIT"
 
-SRC_URI = "${SOURCEFORGE_MIRROR}/expat/expat-${PV}.tar.bz2 \
+SRC_URI = "${SOURCEFORGE_MIRROR}/expat/expat-${PV}.tar.gz \
            file://autotools.patch \
+           file://expat-CVE-2015-1283.patch \
 	  "
 
 inherit autotools lib_package gzipnative

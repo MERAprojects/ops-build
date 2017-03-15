@@ -54,7 +54,6 @@ gdkpixbuf_complete() {
 # An error exit during populate_sysroot_setscene allows bitbake to
 # try to recover by re-building the package.
 #
-DEPENDS_append_class-native = " gdk-pixbuf-native"
 SSTATEPOSTINSTFUNCS_append_class-native = " pixbufcache_sstate_postinst"
 
 # See base.bbclass for the other half of this
@@ -62,8 +61,7 @@ pixbufcache_sstate_postinst() {
 	if [ "${BB_CURRENTTASK}" = "populate_sysroot" ]; then
 		${gdkpixbuf_complete}
 	elif [ "${BB_CURRENTTASK}" = "populate_sysroot_setscene" ]; then
-		if [ -x ${STAGING_LIBDIR_NATIVE}/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders ]; then
-			echo "${gdkpixbuf_complete}" >> ${STAGING_DIR}/sstatecompletions
-		fi
+		echo "${gdkpixbuf_complete}" >> ${STAGING_DIR}/sstatecompletions
 	fi
 }
+

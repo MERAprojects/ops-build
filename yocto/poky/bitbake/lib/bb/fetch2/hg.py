@@ -169,22 +169,25 @@ class Hg(FetchMethod):
         # If the checkout doesn't exist and the mirror tarball does, extract it
         if not os.path.exists(ud.pkgdir) and os.path.exists(ud.fullmirror):
             bb.utils.mkdirhier(ud.pkgdir)
-            runfetchcmd("tar -xzf %s" % (ud.fullmirror), d, workdir=ud.pkgdir)
+            os.chdir(ud.pkgdir)
+            runfetchcmd("tar -xzf %s" % (ud.fullmirror), d)
 
         if os.access(os.path.join(ud.moddir, '.hg'), os.R_OK):
             # Found the source, check whether need pull
             updatecmd = self._buildhgcommand(ud, d, "update")
+            os.chdir(ud.moddir)
             logger.debug(1, "Running %s", updatecmd)
             try:
-                runfetchcmd(updatecmd, d, workdir=ud.moddir)
+                runfetchcmd(updatecmd, d)
             except bb.fetch2.FetchError:
                 # Runnning pull in the repo
                 pullcmd = self._buildhgcommand(ud, d, "pull")
                 logger.info("Pulling " + ud.url)
                 # update sources there
+                os.chdir(ud.moddir)
                 logger.debug(1, "Running %s", pullcmd)
                 bb.fetch2.check_network_access(d, pullcmd, ud.url)
-                runfetchcmd(pullcmd, d, workdir=ud.moddir)
+                runfetchcmd(pullcmd, d)
                 try:
                     os.unlink(ud.fullmirror)
                 except OSError as exc:
@@ -197,15 +200,17 @@ class Hg(FetchMethod):
             logger.info("Fetch " + ud.url)
             # check out sources there
             bb.utils.mkdirhier(ud.pkgdir)
+            os.chdir(ud.pkgdir)
             logger.debug(1, "Running %s", fetchcmd)
             bb.fetch2.check_network_access(d, fetchcmd, ud.url)
-            runfetchcmd(fetchcmd, d, workdir=ud.pkgdir)
+            runfetchcmd(fetchcmd, d)
 
         # Even when we clone (fetch), we still need to update as hg's clone
         # won't checkout the specified revision if its on a branch
         updatecmd = self._buildhgcommand(ud, d, "update")
+        os.chdir(ud.moddir)
         logger.debug(1, "Running %s", updatecmd)
-        runfetchcmd(updatecmd, d, workdir=ud.moddir)
+        runfetchcmd(updatecmd, d)
 
     def clean(self, ud, d):
         """ Clean the hg dir """
@@ -241,9 +246,10 @@ class Hg(FetchMethod):
             if os.path.islink(ud.fullmirror):
                 os.unlink(ud.fullmirror)
 
+            os.chdir(ud.pkgdir)
             logger.info("Creating tarball of hg repository")
-            runfetchcmd("tar -czf %s %s" % (ud.fullmirror, ud.module), d, workdir=ud.pkgdir)
-            runfetchcmd("touch %s.done" % (ud.fullmirror), d, workdir=ud.pkgdir)
+            runfetchcmd("tar -czf %s %s" % (ud.fullmirror, ud.module), d)
+            runfetchcmd("touch %s.done" % (ud.fullmirror), d)
 
     def localpath(self, ud, d):
         return ud.pkgdir
@@ -263,8 +269,10 @@ class Hg(FetchMethod):
                 logger.debug(2, "Unpack: creating new hg repository in '" + codir + "'")
                 runfetchcmd("%s init %s" % (ud.basecmd, codir), d)
             logger.debug(2, "Unpack: updating source in '" + codir + "'")
-            runfetchcmd("%s pull %s" % (ud.basecmd, ud.moddir), d, workdir=codir)
-            runfetchcmd("%s up -C %s" % (ud.basecmd, revflag), d, workdir=codir)
+            os.chdir(codir)
+            runfetchcmd("%s pull %s" % (ud.basecmd, ud.moddir), d)
+            runfetchcmd("%s up -C %s" % (ud.basecmd, revflag), d)
         else:
             logger.debug(2, "Unpack: extracting source to '" + codir + "'")
-            runfetchcmd("%s archive -t files %s %s" % (ud.basecmd, revflag, codir), d, workdir=ud.moddir)
+            os.chdir(ud.moddir)
+            runfetchcmd("%s archive -t files %s %s" % (ud.basecmd, revflag, codir), d)

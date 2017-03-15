@@ -3,6 +3,7 @@
 #
 
 SUMMARY = "Debugging tools"
+LICENSE = "MIT"
 
 inherit packagegroup
 

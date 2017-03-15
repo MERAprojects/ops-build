@@ -237,7 +237,6 @@ TMPDIR = "${TOPDIR}/tmp-sstatesamehash"
 BUILD_ARCH = "x86_64"
 BUILD_OS = "linux"
 SDKMACHINE = "x86_64"
-PACKAGE_CLASSES = "package_rpm package_ipk package_deb"
 """)
         self.track_for_cleanup(topdir + "/tmp-sstatesamehash")
         bitbake("core-image-sato -S none")
@@ -247,7 +246,6 @@ TMPDIR = "${TOPDIR}/tmp-sstatesamehash2"
 BUILD_ARCH = "i686"
 BUILD_OS = "linux"
 SDKMACHINE = "i686"
-PACKAGE_CLASSES = "package_rpm package_ipk package_deb"
 """)
         self.track_for_cleanup(topdir + "/tmp-sstatesamehash2")
         bitbake("core-image-sato -S none")
@@ -266,7 +264,7 @@ PACKAGE_CLASSES = "package_rpm package_ipk package_deb"
         files2 = get_files(topdir + "/tmp-sstatesamehash2/stamps/")
         files2 = [x.replace("tmp-sstatesamehash2", "tmp-sstatesamehash").replace("i686-linux", "x86_64-linux").replace("i686" + targetvendor + "-linux", "x86_64" + targetvendor + "-linux", ) for x in files2]
         self.maxDiff = None
-        self.assertCountEqual(files1, files2)
+        self.assertItemsEqual(files1, files2)
 
 
     @testcase(1271)
@@ -300,7 +298,7 @@ NATIVELSBSTRING = \"DistroB\"
         files2 = get_files(topdir + "/tmp-sstatesamehash2/stamps/")
         files2 = [x.replace("tmp-sstatesamehash2", "tmp-sstatesamehash") for x in files2]
         self.maxDiff = None
-        self.assertCountEqual(files1, files2)
+        self.assertItemsEqual(files1, files2)
 
     @testcase(1368)
     def test_sstate_allarch_samesigs(self):
@@ -311,48 +309,19 @@ NATIVELSBSTRING = \"DistroB\"
         the two MACHINE values.
         """
 
-        configA = """
-TMPDIR = \"${TOPDIR}/tmp-sstatesamehash\"
-MACHINE = \"qemux86-64\"
-"""
-        configB = """
-TMPDIR = \"${TOPDIR}/tmp-sstatesamehash2\"
-MACHINE = \"qemuarm\"
-"""
-        self.sstate_allarch_samesigs(configA, configB)
-
-    def test_sstate_allarch_samesigs_multilib(self):
-        """
-        The sstate checksums of allarch multilib packages should be independent of whichever
-        MACHINE is set. Check this using bitbake -S.
-        Also, rather than duplicate the test, check nativesdk stamps are the same between
-        the two MACHINE values.
-        """
-
-        configA = """
-TMPDIR = \"${TOPDIR}/tmp-sstatesamehash\"
-MACHINE = \"qemux86-64\"
-require conf/multilib.conf
-MULTILIBS = \"multilib:lib32\"
-DEFAULTTUNE_virtclass-multilib-lib32 = \"x86\"
-"""
-        configB = """
-TMPDIR = \"${TOPDIR}/tmp-sstatesamehash2\"
-MACHINE = \"qemuarm\"
-require conf/multilib.conf
-MULTILIBS = \"\"
-"""
-        self.sstate_allarch_samesigs(configA, configB)
-
-    def sstate_allarch_samesigs(self, configA, configB):
-
         topdir = get_bb_var('TOPDIR')
         targetos = get_bb_var('TARGET_OS')
         targetvendor = get_bb_var('TARGET_VENDOR')
-        self.write_config(configA)
+        self.write_config("""
+TMPDIR = \"${TOPDIR}/tmp-sstatesamehash\"
+MACHINE = \"qemux86\"
+""")
         self.track_for_cleanup(topdir + "/tmp-sstatesamehash")
         bitbake("world meta-toolchain -S none")
-        self.write_config(configB)
+        self.write_config("""
+TMPDIR = \"${TOPDIR}/tmp-sstatesamehash2\"
+MACHINE = \"qemuarm\"
+""")
         self.track_for_cleanup(topdir + "/tmp-sstatesamehash2")
         bitbake("world meta-toolchain -S none")
 
@@ -424,7 +393,7 @@ DEFAULTTUNE_virtclass-multilib-lib32 = "x86"
         files2 = get_files(topdir + "/tmp-sstatesamehash2/stamps")
         files2 = [x.replace("tmp-sstatesamehash2", "tmp-sstatesamehash") for x in files2]
         self.maxDiff = None
-        self.assertCountEqual(files1, files2)
+        self.assertItemsEqual(files1, files2)
 
 
     def test_sstate_noop_samesigs(self):
@@ -476,23 +445,23 @@ http_proxy = "http://example.com/"
         files1 = get_files(topdir + "/tmp-sstatesamehash/stamps/")
         files2 = get_files(topdir + "/tmp-sstatesamehash2/stamps/")
         # Remove items that are identical in both sets
-        for k,v in files1.items() & files2.items():
+        for k,v in files1.viewitems() & files2.viewitems():
             del files1[k]
             del files2[k]
         if not files1 and not files2:
             # No changes, so we're done
             return
 
-        for k in files1.keys() | files2.keys():
+        for k in files1.viewkeys() | files2.viewkeys():
             if k in files1 and k in files2:
-                print("%s differs:" % k)
-                print(subprocess.check_output(("bitbake-diffsigs",
+                print "%s differs:" % k
+                print subprocess.check_output(("bitbake-diffsigs",
                                                topdir + "/tmp-sstatesamehash/stamps/" + k + "." + files1[k],
-                                               topdir + "/tmp-sstatesamehash2/stamps/" + k + "." + files2[k])))
+                                               topdir + "/tmp-sstatesamehash2/stamps/" + k + "." + files2[k]))
             elif k in files1 and k not in files2:
-                print("%s in files1" % k)
+                print "%s in files1" % k
             elif k not in files1 and k in files2:
-                print("%s in files2" % k)
+                print "%s in files2" % k
             else:
                 assert "shouldn't reach here"
         self.fail("sstate hashes not identical.")

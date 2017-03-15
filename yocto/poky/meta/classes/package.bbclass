@@ -63,7 +63,7 @@ def legitimize_package_name(s):
     def fixutf(m):
         cp = m.group(1)
         if cp:
-            return ('\\u%s' % cp).encode('latin-1').decode('unicode_escape')
+            return ('\u%s' % cp).decode('unicode_escape').encode('utf-8')
 
     # Handle unicode codepoints encoded as <U0123>, as in glibc locale files.
     s = re.sub('<U([0-9A-Fa-f]{1,4})>', fixutf, s)
@@ -259,30 +259,14 @@ def files_from_filevars(filevars):
                 continue
         files.append(f)
 
-    symlink_paths = []
-    for ind, f in enumerate(files):
-        # Handle directory symlinks. Truncate path to the lowest level symlink
-        parent = ''
-        for dirname in f.split('/')[:-1]:
-            parent = os.path.join(parent, dirname)
-            if dirname == '.':
-                continue
-            if cpath.islink(parent):
-                bb.warn("FILES contains file '%s' which resides under a "
-                        "directory symlink. Please fix the recipe and use the "
-                        "real path for the file." % f[1:])
-                symlink_paths.append(f)
-                files[ind] = parent
-                f = parent
-                break
-
+    for f in files:
         if not cpath.islink(f):
             if cpath.isdir(f):
                 newfiles = [ os.path.join(f,x) for x in os.listdir(f) ]
                 if newfiles:
                     files += newfiles
 
-    return files, symlink_paths
+    return files
 
 # Called in package_<rpm,ipk,deb>.bbclass to get the correct list of configuration files
 def get_conffiles(pkg, d):
@@ -297,7 +281,7 @@ def get_conffiles(pkg, d):
     if conffiles == None:
         conffiles = ""
     conffiles = conffiles.split()
-    conf_orig_list = files_from_filevars(conffiles)[0]
+    conf_orig_list = files_from_filevars(conffiles)
 
     # Remove links and directories from conf_orig_list to get conf_list which only contains normal files
     conf_list = []
@@ -857,9 +841,6 @@ python split_and_strip_files () {
     dvar = d.getVar('PKGD', True)
     pn = d.getVar('PN', True)
 
-    oldcwd = os.getcwd()
-    os.chdir(dvar)
-
     # We default to '.debug' style
     if d.getVar('PACKAGE_DEBUG_SPLIT_STYLE', True) == 'debug-file-directory':
         # Single debug-file-directory style debug info
@@ -882,6 +863,8 @@ python split_and_strip_files () {
 
     sourcefile = d.expand("${WORKDIR}/debugsources.list")
     bb.utils.remove(sourcefile)
+
+    os.chdir(dvar)
 
     # Return type (bits):
     # 0 - not elf
@@ -920,8 +903,7 @@ python split_and_strip_files () {
     inodes = {}
     libdir = os.path.abspath(dvar + os.sep + d.getVar("libdir", True))
     baselibdir = os.path.abspath(dvar + os.sep + d.getVar("base_libdir", True))
-    if (d.getVar('INHIBIT_PACKAGE_STRIP', True) != '1' or \
-            d.getVar('INHIBIT_PACKAGE_DEBUG_SPLIT', True) != '1'):
+    if (d.getVar('INHIBIT_PACKAGE_STRIP', True) != '1'):
         for root, dirs, files in cpath.walk(dvar):
             for f in files:
                 file = os.path.join(root, f)
@@ -1069,7 +1051,6 @@ python split_and_strip_files () {
     #
     # End of strip
     #
-    os.chdir(oldcwd)
 }
 
 python populate_packages () {
@@ -1127,7 +1108,7 @@ python populate_packages () {
             filesvar.replace("//", "/")
 
         origfiles = filesvar.split()
-        files, symlink_paths = files_from_filevars(origfiles)
+        files = files_from_filevars(origfiles)
 
         if autodebug and pkg.endswith("-dbg"):
             files.extend(debug)
@@ -1168,19 +1149,13 @@ python populate_packages () {
             fpath = os.path.join(root,file)
             if not cpath.islink(file):
                 os.link(file, fpath)
+                fstat = cpath.stat(file)
+                os.chmod(fpath, fstat.st_mode)
+                os.chown(fpath, fstat.st_uid, fstat.st_gid)
                 continue
             ret = bb.utils.copyfile(file, fpath)
             if ret is False or ret == 0:
-                bb.fatal("File population failed")
-
-        # Check if symlink paths exist
-        for file in symlink_paths:
-            if not os.path.exists(os.path.join(root,file)):
-                bb.fatal("File '%s' cannot be packaged into '%s' because its "
-                         "parent directory structure does not exist. One of "
-                         "its parent directories is a symlink whose target "
-                         "directory is not included in the package." %
-                         (file, pkg))
+                raise bb.build.FuncFailed("File population failed")
 
     os.umask(oldumask)
     os.chdir(workdir)
@@ -1283,8 +1258,8 @@ python emit_pkgdata() {
     def write_if_exists(f, pkg, var):
         def encode(str):
             import codecs
-            c = codecs.getencoder("unicode_escape")
-            return c(str)[0].decode("latin1")
+            c = codecs.getencoder("string_escape")
+            return c(str)[0]
 
         val = d.getVar('%s_%s' % (var, pkg), True)
         if val:
@@ -1490,7 +1465,7 @@ python package_do_shlibs() {
     import re, pipes
     import subprocess as sub
 
-    exclude_shlibs = d.getVar('EXCLUDE_FROM_SHLIBS', False)
+    exclude_shlibs = d.getVar('EXCLUDE_FROM_SHLIBS', 0)
     if exclude_shlibs:
         bb.note("not generating shlibs")
         return
@@ -1528,7 +1503,7 @@ python package_do_shlibs() {
             m = re.match("\s+RPATH\s+([^\s]*)", l)
             if m:
                 rpaths = m.group(1).replace("$ORIGIN", ldir).split(":")
-                rpath = list(map(os.path.normpath, rpaths))
+                rpath = map(os.path.normpath, rpaths)
         for l in lines:
             m = re.match("\s+NEEDED\s+([^\s]*)", l)
             if m:
@@ -1579,19 +1554,19 @@ python package_do_shlibs() {
         if file.endswith('.dylib') or file.endswith('.so'):
             rpath = []
             p = sub.Popen([d.expand("${HOST_PREFIX}otool"), '-l', file],stdout=sub.PIPE,stderr=sub.PIPE)
-            out, err = p.communicate()
-            # If returned successfully, process stdout for results
+            err, out = p.communicate()
+            # If returned successfully, process stderr for results
             if p.returncode == 0:
-                for l in out.split("\n"):
+                for l in err.split("\n"):
                     l = l.strip()
                     if l.startswith('path '):
                         rpath.append(l.split()[1])
 
         p = sub.Popen([d.expand("${HOST_PREFIX}otool"), '-L', file],stdout=sub.PIPE,stderr=sub.PIPE)
-        out, err = p.communicate()
-        # If returned successfully, process stdout for results
+        err, out = p.communicate()
+        # If returned successfully, process stderr for results
         if p.returncode == 0:
-            for l in out.split("\n"):
+            for l in err.split("\n"):
                 l = l.strip()
                 if not l or l.endswith(":"):
                     continue
@@ -1698,7 +1673,7 @@ python package_do_shlibs() {
                 bb.debug(2, '%s: Dependency %s covered by PRIVATE_LIBS' % (pkg, n[0]))
                 continue
             if n[0] in shlib_provider.keys():
-                shlib_provider_path = []
+                shlib_provider_path = list()
                 for k in shlib_provider[n[0]].keys():
                     shlib_provider_path.append(k)
                 match = None
@@ -2153,3 +2128,4 @@ def mapping_rename_hook(d):
     runtime_mapping_rename("RDEPENDS", pkg, d)
     runtime_mapping_rename("RRECOMMENDS", pkg, d)
     runtime_mapping_rename("RSUGGESTS", pkg, d)
+

@@ -22,7 +22,6 @@
 import unittest
 import tempfile
 import subprocess
-import collections
 import os
 from bb.fetch2 import URI
 from bb.fetch2 import FetchMethod
@@ -134,10 +133,10 @@ class URITest(unittest.TestCase):
             'userinfo': 'anoncvs:anonymous',
             'username': 'anoncvs',
             'password': 'anonymous',
-            'params': collections.OrderedDict([
-                ('tag', 'V0-99-81'),
-                ('module', 'familiar/dist/ipkg')
-            ]),
+            'params': {
+                'tag': 'V0-99-81',
+                'module': 'familiar/dist/ipkg'
+            },
             'query': {},
             'relative': False
         },
@@ -360,10 +359,7 @@ class FetcherTest(unittest.TestCase):
 
     def tearDown(self):
         os.chdir(self.origdir)
-        if os.environ.get("BB_TMPDIR_NOCLEAN") == "yes":
-            print("Not cleaning up %s. Please remove manually." % self.tempdir)
-        else:
-            bb.utils.prunedir(self.tempdir)
+        bb.utils.prunedir(self.tempdir)
 
 class MirrorUriTest(FetcherTest):
 
@@ -454,7 +450,7 @@ class MirrorUriTest(FetcherTest):
 class FetcherLocalTest(FetcherTest):
     def setUp(self):
         def touch(fn):
-            with open(fn, 'a'):
+            with file(fn, 'a'):
                 os.utime(fn, None)
 
         super(FetcherLocalTest, self).setUp()
@@ -507,15 +503,6 @@ class FetcherLocalTest(FetcherTest):
     def test_local_deepsubdirparam(self):
         tree = self.fetchUnpack(['file://dir/subdir/e;subdir=bar'])
         self.assertEqual(tree, ['bar/dir/subdir/e'])
-
-    def test_local_absolutedir(self):
-        # Unpacking to an absolute path that is a subdirectory of the root
-        # should work
-        tree = self.fetchUnpack(['file://a;subdir=%s' % os.path.join(self.unpackdir, 'bar')])
-
-        # Unpacking to an absolute path outside of the root should fail
-        with self.assertRaises(bb.fetch2.UnpackError):
-            self.fetchUnpack(['file://a;subdir=/bin/sh'])
 
 class FetcherNetworkTest(FetcherTest):
 
@@ -597,36 +584,6 @@ class FetcherNetworkTest(FetcherTest):
             url1 = url2 = "git://git.openembedded.org/bitbake;rev=270a05b0b4ba0959fe0624d2a4885d7b70426da5;tag=270a05b0b4ba0959fe0624d2a4885d7b70426da5"
             self.assertRaises(bb.fetch.FetchError, self.gitfetcher, url1, url2)
 
-        def test_gitfetch_localusehead(self):
-            # Create dummy local Git repo
-            src_dir = tempfile.mkdtemp(dir=self.tempdir,
-                                       prefix='gitfetch_localusehead_')
-            src_dir = os.path.abspath(src_dir)
-            bb.process.run("git init", cwd=src_dir)
-            bb.process.run("git commit --allow-empty -m'Dummy commit'",
-                           cwd=src_dir)
-            # Use other branch than master
-            bb.process.run("git checkout -b my-devel", cwd=src_dir)
-            bb.process.run("git commit --allow-empty -m'Dummy commit 2'",
-                           cwd=src_dir)
-            stdout = bb.process.run("git rev-parse HEAD", cwd=src_dir)
-            orig_rev = stdout[0].strip()
-
-            # Fetch and check revision
-            self.d.setVar("SRCREV", "AUTOINC")
-            url = "git://" + src_dir + ";protocol=file;usehead=1"
-            fetcher = bb.fetch.Fetch([url], self.d)
-            fetcher.download()
-            fetcher.unpack(self.unpackdir)
-            stdout = bb.process.run("git rev-parse HEAD",
-                                    cwd=os.path.join(self.unpackdir, 'git'))
-            unpack_rev = stdout[0].strip()
-            self.assertEqual(orig_rev, unpack_rev)
-
-        def test_gitfetch_remoteusehead(self):
-            url = "git://git.openembedded.org/bitbake;usehead=1"
-            self.assertRaises(bb.fetch.ParameterError, self.gitfetcher, url, url)
-
         def test_gitfetch_premirror(self):
             url1 = "git://git.openembedded.org/bitbake"
             url2 = "git://someserver.org/bitbake"
@@ -703,7 +660,7 @@ class URLHandle(unittest.TestCase):
     datatable = {
        "http://www.google.com/index.html" : ('http', 'www.google.com', '/index.html', '', '', {}),
        "cvs://anoncvs@cvs.handhelds.org/cvs;module=familiar/dist/ipkg" : ('cvs', 'cvs.handhelds.org', '/cvs', 'anoncvs', '', {'module': 'familiar/dist/ipkg'}),
-       "cvs://anoncvs:anonymous@cvs.handhelds.org/cvs;tag=V0-99-81;module=familiar/dist/ipkg" : ('cvs', 'cvs.handhelds.org', '/cvs', 'anoncvs', 'anonymous', collections.OrderedDict([('tag', 'V0-99-81'), ('module', 'familiar/dist/ipkg')])),
+       "cvs://anoncvs:anonymous@cvs.handhelds.org/cvs;tag=V0-99-81;module=familiar/dist/ipkg" : ('cvs', 'cvs.handhelds.org', '/cvs', 'anoncvs', 'anonymous', {'tag': 'V0-99-81', 'module': 'familiar/dist/ipkg'}),
        "git://git.openembedded.org/bitbake;branch=@foo" : ('git', 'git.openembedded.org', '/bitbake', '', '', {'branch': '@foo'}),
        "file://somelocation;someparam=1": ('file', '', 'somelocation', '', '', {'someparam': '1'}),
     }
@@ -810,6 +767,7 @@ class FetchLatestVersionTest(FetcherTest):
 
 class FetchCheckStatusTest(FetcherTest):
     test_wget_uris = ["http://www.cups.org/software/1.7.2/cups-1.7.2-source.tar.bz2",
+                      "http://www.cups.org/software/ipptool/ipptool-20130731-linux-ubuntu-i686.tar.gz",
                       "http://www.cups.org/",
                       "http://downloads.yoctoproject.org/releases/sato/sato-engine-0.1.tar.gz",
                       "http://downloads.yoctoproject.org/releases/sato/sato-engine-0.2.tar.gz",

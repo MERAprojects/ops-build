@@ -24,7 +24,6 @@ RDEPENDS_${PN} = "\
     nativesdk-makedevs \
     nativesdk-smartpm \
     nativesdk-postinst-intercept \
-    ${@bb.utils.contains('DISTRO_FEATURES', 'wayland', 'nativesdk-wayland', '', d)} \
     "
 
 RDEPENDS_${PN}_darwin = "\

@@ -15,9 +15,6 @@
 # to try and reduce disk usage
 BB_SCHEDULER ?= "completion"
 
-# Run the rm_work task in the idle scheduling class
-BB_TASK_IONICE_LEVEL_task-rm_work = "3.0"
-
 RMWORK_ORIG_TASK := "${BB_DEFAULT_TASK}"
 BB_DEFAULT_TASK = "rm_work_all"
 
@@ -58,7 +55,7 @@ do_rm_work () {
             *do_setscene*)
                 break
                 ;;
-            *sigdata*|*sigbasedata*)
+            *sigdata*)
                 i=dummy
                 break
                 ;;
@@ -66,10 +63,14 @@ do_rm_work () {
                 i=dummy
                 break
                 ;;
-            *do_rootfs*|*do_image*|*do_bootimg*|*do_bootdirectdisk*|*do_vmimg*)
-                i=dummy
-                break
-                ;;
+            *do_rootfs*)
+               i=dummy
+               break
+               ;;
+            *do_image*)
+               i=dummy
+               break
+               ;;
             *do_build*)
                 i=dummy
                 break
@@ -118,8 +119,6 @@ rm_work_rootfs () {
 rm_work_rootfs[cleandirs] = "${WORKDIR}/rootfs"
 
 python () {
-    if bb.data.inherits_class('kernel', d):
-        d.appendVar("RM_WORK_EXCLUDE", ' ' + d.getVar("PN", True))
     # If the recipe name is in the RM_WORK_EXCLUDE, skip the recipe.
     excludes = (d.getVar("RM_WORK_EXCLUDE", True) or "").split()
     pn = d.getVar("PN", True)

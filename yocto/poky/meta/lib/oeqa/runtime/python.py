@@ -4,7 +4,7 @@ from oeqa.oetest import oeRuntimeTest, skipModule
 from oeqa.utils.decorators import *
 
 def setUpModule():
-    if not oeRuntimeTest.hasPackage("python-core"):
+    if not oeRuntimeTest.hasPackage("python"):
         skipModule("No python package in the image")
 
 

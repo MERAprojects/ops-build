@@ -3,7 +3,7 @@ require glibc-ld.inc
 require glibc-testing.inc
 
 STAGINGCC = "gcc-cross-initial-${TARGET_ARCH}"
-STAGINGCC_class-nativesdk = "gcc-crosssdk-initial-${SDK_SYS}"
+STAGINGCC_class-nativesdk = "gcc-crosssdk-initial-${TARGET_ARCH}"
 PATH_prepend = "${STAGING_BINDIR_TOOLCHAIN}.${STAGINGCC}:"
 
 TOOLCHAIN_OPTIONS = " --sysroot=${STAGING_DIR_TCBOOTSTRAP}"
@@ -78,9 +78,3 @@ do_configure_prepend() {
 }
 
 GLIBC_ADDONS ?= "nptl,libidn"
-
-# Enable backtrace from abort()
-do_configure_append_arm () {
-	echo "CFLAGS-abort.c = -fasynchronous-unwind-tables" >> ${B}/configparms
-	echo "CFLAGS-raise.c = -fasynchronous-unwind-tables" >> ${B}/configparms
-}

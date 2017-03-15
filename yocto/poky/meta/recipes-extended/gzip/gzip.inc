@@ -22,6 +22,11 @@ do_install_append () {
 	fi
 }
 
+do_install_append_libc-musl () {
+	rm ${D}${libdir}/charset.alias
+	rmdir ${D}${libdir}
+}
+
 inherit update-alternatives
 
 ALTERNATIVE_PRIORITY = "100"

@@ -396,6 +396,7 @@ index 889d215..4307266 100644
          'License :: OSI Approved :: Apache Software License'
 -    ]
 +    ],
++    zip_safe= False,
 +    ext_modules=[setuptools.Extension("ovs._json", sources=["ovs/_json.c"],
 +                                      libraries=['ovscommon'],
 +                                      include_dirs=[includedir, includedir + '/ovs' ],

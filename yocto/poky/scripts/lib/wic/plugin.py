@@ -29,7 +29,7 @@ PLUGIN_TYPES = ["imager", "source"]
 PLUGIN_DIR = "/lib/wic/plugins" # relative to scripts
 SCRIPTS_PLUGIN_DIR = "scripts" + PLUGIN_DIR
 
-class PluginMgr():
+class PluginMgr(object):
     plugin_dirs = {}
 
     # make the manager class as singleton
@@ -81,7 +81,7 @@ class PluginMgr():
             # the value True/False means "loaded"
 
     def _load_all(self):
-        for (pdir, loaded) in self.plugin_dirs.items():
+        for (pdir, loaded) in self.plugin_dirs.iteritems():
             if loaded:
                 continue
 
@@ -97,7 +97,7 @@ class PluginMgr():
                             self.plugin_dirs[pdir] = True
                             msger.debug("Plugin module %s:%s imported"\
                                         % (mod, pymod.__file__))
-                        except ImportError as err:
+                        except ImportError, err:
                             msg = 'Failed to load plugin %s/%s: %s' \
                                 % (os.path.basename(pdir), mod, err)
                             msger.warning(msg)
@@ -135,9 +135,9 @@ class PluginMgr():
         None is returned.
         """
         return_methods = None
-        for _source_name, klass in self.get_plugins('source').items():
+        for _source_name, klass in self.get_plugins('source').iteritems():
             if _source_name == source_name:
-                for _method_name in methods:
+                for _method_name in methods.keys():
                     if not hasattr(klass, _method_name):
                         msger.warning("Unimplemented %s source interface for: %s"\
                                       % (_method_name, _source_name))
