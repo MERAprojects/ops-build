@@ -5,7 +5,7 @@
  // limitations under the License.
  
 -// +build !nouname,linux,386 !nouname,linux,amd64 !nouname,linux,arm64
-+// +build !nouname,linux,386 !nouname,linux,amd64 !nouname,linux,arm64 !nouname,linux,mipsle
++// +build !nouname,linux,386 !nouname,linux,amd64 !nouname,linux,arm64 !nouname,linux,mipsle !nouname,linux,mips
  
  package collector
  

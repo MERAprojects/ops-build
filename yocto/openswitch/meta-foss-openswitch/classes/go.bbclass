@@ -6,6 +6,7 @@ def map_go_arch(a, d):
     elif re.match('^arm$', a):     return 'arm'
     elif re.match('^aarch64$', a): return 'arm64'
     elif re.match('^mipsel', a): return 'mipsle'
+    elif re.match('^mips', a): return 'mips'
     else:
         bb.error("cannot map '%s' to a Go architecture" % a)
 

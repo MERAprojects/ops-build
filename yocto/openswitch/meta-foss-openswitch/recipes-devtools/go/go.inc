@@ -32,6 +32,9 @@ setup_go_arch() {
       mipsel)
         ARCH=mipsle
         ;;
+      mips)
+        ARCH=mips
+        ;;
     esac
 
     echo "${ARCH}"
