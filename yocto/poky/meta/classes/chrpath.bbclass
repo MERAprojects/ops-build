@@ -5,17 +5,15 @@ def process_file_linux(cmd, fpath, rootdir, baseprefix, tmpdir, d):
     import subprocess as sub
 
     p = sub.Popen([cmd, '-l', fpath],stdout=sub.PIPE,stderr=sub.PIPE)
-    out, err = p.communicate()
-    # If returned successfully, process stdout for results
+    err, out = p.communicate()
+    # If returned successfully, process stderr for results
     if p.returncode != 0:
         return
 
-    out = out.decode('utf-8')
-
     # Handle RUNPATH as well as RPATH
-    out = out.replace("RUNPATH=","RPATH=")
+    err = err.replace("RUNPATH=","RPATH=")
     # Throw away everything other than the rpath list
-    curr_rpath = out.partition("RPATH=")[2]
+    curr_rpath = err.partition("RPATH=")[2]
     #bb.note("Current rpath for %s is %s" % (fpath, curr_rpath.strip()))
     rpaths = curr_rpath.split(":")
     new_rpaths = []
@@ -39,17 +37,18 @@ def process_file_linux(cmd, fpath, rootdir, baseprefix, tmpdir, d):
         p = sub.Popen([cmd, '-r', args, fpath],stdout=sub.PIPE,stderr=sub.PIPE)
         out, err = p.communicate()
         if p.returncode != 0:
-            bb.fatal("%s: chrpath command failed with exit code %d:\n%s%s" % (d.getVar('PN', True), p.returncode, out, err))
+            bb.error("%s: chrpath command failed with exit code %d:\n%s%s" % (d.getVar('PN', True), p.returncode, out, err))
+            raise bb.build.FuncFailed
 
 def process_file_darwin(cmd, fpath, rootdir, baseprefix, tmpdir, d):
     import subprocess as sub
 
     p = sub.Popen([d.expand("${HOST_PREFIX}otool"), '-L', fpath],stdout=sub.PIPE,stderr=sub.PIPE)
-    out, err = p.communicate()
-    # If returned successfully, process stdout for results
+    err, out = p.communicate()
+    # If returned successfully, process stderr for results
     if p.returncode != 0:
         return
-    for l in out.split("\n"):
+    for l in err.split("\n"):
         if "(compatibility" not in l:
             continue
         rpath = l.partition("(compatibility")[0].strip()
@@ -58,7 +57,7 @@ def process_file_darwin(cmd, fpath, rootdir, baseprefix, tmpdir, d):
 
         newpath = "@loader_path/" + os.path.relpath(rpath, os.path.dirname(fpath.replace(rootdir, "/")))
         p = sub.Popen([d.expand("${HOST_PREFIX}install_name_tool"), '-change', rpath, newpath, fpath],stdout=sub.PIPE,stderr=sub.PIPE)
-        out, err = p.communicate()
+        err, out = p.communicate()
 
 def process_dir (rootdir, directory, d):
     import stat

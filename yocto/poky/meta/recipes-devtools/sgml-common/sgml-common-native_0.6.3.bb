@@ -22,6 +22,8 @@ S = "${WORKDIR}/sgml-common-${PV}"
 
 SYSROOT_PREPROCESS_FUNCS += "sgml_common_native_mangle"
 SSTATEPOSTINSTFUNCS += "sgml_common_sstate_postinst"
+CLEANFUNCS += "sgml_common_sstate_clean"
+
 
 do_install_append() {
 	# install-catalog script contains hard-coded references to
@@ -57,14 +59,13 @@ sgml_common_sstate_postinst() {
 				fi
 			done
 		fi
-		cat << EOF > ${SSTATE_INST_POSTRM}
-#!/bin/sh
+	fi
+}
 
-# Ensure that the catalog file sgml-docbook.cat is properly
-# updated when the package is removed from sstate cache.
-if [ -f ${sysconfdir}/sgml/sgml-docbook.cat ]; then
-	sed -i '/\/sgml\/sgml-ent.cat/d' ${sysconfdir}/sgml/sgml-docbook.cat
-fi
-EOF
+sgml_common_sstate_clean () {
+	# Ensure that the catalog file sgml-docbook.cat is properly
+	# updated when the package is removed from sstate cache.
+	if [ -f ${sysconfdir}/sgml/sgml-docbook.cat ]; then
+		sed -i '/\/sgml\/sgml-ent.cat/d' ${sysconfdir}/sgml/sgml-docbook.cat
 	fi
 }

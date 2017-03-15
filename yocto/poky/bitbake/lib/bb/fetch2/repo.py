@@ -69,23 +69,24 @@ class Repo(FetchMethod):
         else:
             username = ""
 
-        repodir = os.path.join(codir, "repo")
-        bb.utils.mkdirhier(repodir)
-        if not os.path.exists(os.path.join(repodir, ".repo")):
+        bb.utils.mkdirhier(os.path.join(codir, "repo"))
+        os.chdir(os.path.join(codir, "repo"))
+        if not os.path.exists(os.path.join(codir, "repo", ".repo")):
             bb.fetch2.check_network_access(d, "repo init -m %s -b %s -u %s://%s%s%s" % (ud.manifest, ud.branch, ud.proto, username, ud.host, ud.path), ud.url)
-            runfetchcmd("repo init -m %s -b %s -u %s://%s%s%s" % (ud.manifest, ud.branch, ud.proto, username, ud.host, ud.path), d, workdir=repodir)
+            runfetchcmd("repo init -m %s -b %s -u %s://%s%s%s" % (ud.manifest, ud.branch, ud.proto, username, ud.host, ud.path), d)
 
         bb.fetch2.check_network_access(d, "repo sync %s" % ud.url, ud.url)
-        runfetchcmd("repo sync", d, workdir=repodir)
+        runfetchcmd("repo sync", d)
+        os.chdir(codir)
 
         scmdata = ud.parm.get("scmdata", "")
         if scmdata == "keep":
             tar_flags = ""
         else:
-            tar_flags = "--exclude='.repo' --exclude='.git'"
+            tar_flags = "--exclude '.repo' --exclude '.git'"
 
         # Create a cache
-        runfetchcmd("tar %s -czf %s %s" % (tar_flags, ud.localpath, os.path.join(".", "*") ), d, workdir=codir)
+        runfetchcmd("tar %s -czf %s %s" % (tar_flags, ud.localpath, os.path.join(".", "*") ), d)
 
     def supports_srcrev(self):
         return False

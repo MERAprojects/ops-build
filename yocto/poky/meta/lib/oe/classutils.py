@@ -1,11 +1,4 @@
-
-class ClassRegistryMeta(type):
-    """Give each ClassRegistry their own registry"""
-    def __init__(cls, name, bases, attrs):
-        cls.registry = {}
-        type.__init__(cls, name, bases, attrs)
-
-class ClassRegistry(type, metaclass=ClassRegistryMeta):
+class ClassRegistry(type):
     """Maintain a registry of classes, indexed by name.
 
 Note that this implementation requires that the names be unique, as it uses
@@ -19,6 +12,12 @@ Subclasses of ClassRegistry may define an 'implemented' property to exert
 control over whether the class will be added to the registry (e.g. to keep
 abstract base classes out of the registry)."""
     priority = 0
+    class __metaclass__(type):
+        """Give each ClassRegistry their own registry"""
+        def __init__(cls, name, bases, attrs):
+            cls.registry = {}
+            type.__init__(cls, name, bases, attrs)
+
     def __init__(cls, name, bases, attrs):
         super(ClassRegistry, cls).__init__(name, bases, attrs)
         try:
@@ -35,7 +34,7 @@ abstract base classes out of the registry)."""
 
     @classmethod
     def prioritized(tcls):
-        return sorted(list(tcls.registry.values()),
+        return sorted(tcls.registry.values(),
                       key=lambda v: v.priority, reverse=True)
 
     def unregister(cls):

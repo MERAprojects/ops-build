@@ -33,9 +33,7 @@ SRC_URI = "http://downloads.yoctoproject.org/mirror/sources/mtools-${PV}.tar.gz 
            file://mtools-makeinfo.patch \
            file://mtools.patch \
            file://no-x11.patch \
-           file://fix-broken-lz.patch \
-           file://0001-Continue-even-if-fs-size-is-not-divisible-by-sectors.patch \
-           "
+           file://fix-broken-lz.patch"
 
 inherit autotools texinfo
 

@@ -3,7 +3,7 @@
 
 require musl.inc
 
-SRCREV = "39494a273eaa6b714e0fa0c59ce7a1f5fbc80a1e"
+SRCREV = "faf69b9a73d09fafcbe4fd3007b8d8724293d8e1"
 
 PV = "1.1.15+git${SRCPV}"
 
@@ -25,6 +25,8 @@ DEPENDS = "virtual/${TARGET_PREFIX}binutils \
           "
 
 export CROSS_COMPILE="${TARGET_PREFIX}"
+
+EXTRA_OEMAKE = ""
 
 LDFLAGS += "-Wl,-soname,libc.so"
 

@@ -55,8 +55,8 @@ function layerBtnsInit() {
     });
   });
 
-  $("td .build-recipe-btn").unbind('click');
-  $("td .build-recipe-btn").click(function(e){
+  $(".build-recipe-btn").unbind('click');
+  $(".build-recipe-btn").click(function(e){
     e.preventDefault();
     var recipe = $(this).data('recipe-name');
 

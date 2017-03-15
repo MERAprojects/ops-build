@@ -88,25 +88,28 @@ class Bzr(FetchMethod):
             bzrcmd = self._buildbzrcommand(ud, d, "update")
             logger.debug(1, "BZR Update %s", ud.url)
             bb.fetch2.check_network_access(d, bzrcmd, ud.url)
-            runfetchcmd(bzrcmd, d, workdir=os.path.join(ud.pkgdir, os.path.basename(ud.path)))
+            os.chdir(os.path.join (ud.pkgdir, os.path.basename(ud.path)))
+            runfetchcmd(bzrcmd, d)
         else:
             bb.utils.remove(os.path.join(ud.pkgdir, os.path.basename(ud.pkgdir)), True)
             bzrcmd = self._buildbzrcommand(ud, d, "fetch")
             bb.fetch2.check_network_access(d, bzrcmd, ud.url)
             logger.debug(1, "BZR Checkout %s", ud.url)
             bb.utils.mkdirhier(ud.pkgdir)
+            os.chdir(ud.pkgdir)
             logger.debug(1, "Running %s", bzrcmd)
-            runfetchcmd(bzrcmd, d, workdir=ud.pkgdir)
+            runfetchcmd(bzrcmd, d)
+
+        os.chdir(ud.pkgdir)
 
         scmdata = ud.parm.get("scmdata", "")
         if scmdata == "keep":
             tar_flags = ""
         else:
-            tar_flags = "--exclude='.bzr' --exclude='.bzrtags'"
+            tar_flags = "--exclude '.bzr' --exclude '.bzrtags'"
 
         # tar them up to a defined filename
-        runfetchcmd("tar %s -czf %s %s" % (tar_flags, ud.localpath, os.path.basename(ud.pkgdir)),
-                    d, cleanup=[ud.localpath], workdir=ud.pkgdir)
+        runfetchcmd("tar %s -czf %s %s" % (tar_flags, ud.localpath, os.path.basename(ud.pkgdir)), d, cleanup = [ud.localpath])
 
     def supports_srcrev(self):
         return True

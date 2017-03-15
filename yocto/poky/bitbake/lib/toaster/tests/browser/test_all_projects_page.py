@@ -93,7 +93,7 @@ class TestAllProjectsPage(SeleniumTestCase):
         """
         url = reverse('all-projects')
         self.get(url)
-        self.wait_until_visible('#empty-state-projectstable')
+        self.wait_until_visible('#no-results-projectstable')
 
         rows = self.find_all('#projectstable tbody tr')
         self.assertEqual(len(rows), 0, 'should be no projects displayed')
@@ -122,13 +122,12 @@ class TestAllProjectsPage(SeleniumTestCase):
         self._add_non_default_project()
 
         self.get(reverse('all-projects'))
-        self.wait_until_visible("#projectstable tr")
 
         # find the row for the default project
         default_project_row = self._get_row_for_project(self.default_project.name)
 
         # check the release text for the default project
-        selector = 'span[data-project-field="release"] span.text-muted'
+        selector = 'span[data-project-field="release"] span.muted'
         element = default_project_row.find_element_by_css_selector(selector)
         text = element.text.strip()
         self.assertEqual(text, 'Not applicable',
@@ -138,7 +137,7 @@ class TestAllProjectsPage(SeleniumTestCase):
         other_project_row = self._get_row_for_project(self.project.name)
 
         # check the link in the release cell for the other project
-        selector = 'span[data-project-field="release"]'
+        selector = 'span[data-project-field="release"] a'
         element = other_project_row.find_element_by_css_selector(selector)
         text = element.text.strip()
         self.assertEqual(text, self.release.name,
@@ -157,13 +156,11 @@ class TestAllProjectsPage(SeleniumTestCase):
 
         self.get(reverse('all-projects'))
 
-        self.wait_until_visible("#projectstable tr")
-
         # find the row for the default project
         default_project_row = self._get_row_for_project(self.default_project.name)
 
         # check the machine cell for the default project
-        selector = 'span[data-project-field="machine"] span.text-muted'
+        selector = 'span[data-project-field="machine"] span.muted'
         element = default_project_row.find_element_by_css_selector(selector)
         text = element.text.strip()
         self.assertEqual(text, 'Not applicable',
@@ -173,7 +170,7 @@ class TestAllProjectsPage(SeleniumTestCase):
         other_project_row = self._get_row_for_project(self.project.name)
 
         # check the link in the machine cell for the other project
-        selector = 'span[data-project-field="machine"]'
+        selector = 'span[data-project-field="machine"] a'
         element = other_project_row.find_element_by_css_selector(selector)
         text = element.text.strip()
         self.assertEqual(text, self.MACHINE_NAME,

@@ -130,9 +130,7 @@ class SignatureGeneratorOEBasicHash(bb.siggen.SignatureGeneratorBasicHash):
         super(bb.siggen.SignatureGeneratorBasicHash, self).set_taskdata(coredata)
 
     def dump_sigs(self, dataCache, options):
-        sigfile = os.getcwd() + "/locked-sigs.inc"
-        bb.plain("Writing locked sigs to %s" % sigfile)
-        self.dump_lockedsigs(sigfile)
+        self.dump_lockedsigs()
         return super(bb.siggen.SignatureGeneratorBasicHash, self).dump_sigs(dataCache, options)
 
     def get_taskhash(self, fn, task, deps, dataCache):
@@ -183,7 +181,11 @@ class SignatureGeneratorOEBasicHash(bb.siggen.SignatureGeneratorBasicHash):
             return
         super(bb.siggen.SignatureGeneratorBasicHash, self).dump_sigtask(fn, task, stampbase, runtime)
 
-    def dump_lockedsigs(self, sigfile, taskfilter=None):
+    def dump_lockedsigs(self, sigfile=None, taskfilter=None):
+        if not sigfile:
+            sigfile = os.getcwd() + "/locked-sigs.inc"
+
+        bb.plain("Writing locked sigs to %s" % sigfile)
         types = {}
         for k in self.runtaskdeps:
             if taskfilter:
@@ -208,7 +210,7 @@ class SignatureGeneratorOEBasicHash(bb.siggen.SignatureGeneratorBasicHash):
                         continue
                     f.write("    " + self.lockedpnmap[fn] + ":" + task + ":" + self.taskhash[k] + " \\\n")
                 f.write('    "\n')
-            f.write('SIGGEN_LOCKEDSIGS_TYPES_%s = "%s"' % (self.machine, " ".join(list(types.keys()))))
+            f.write('SIGGEN_LOCKEDSIGS_TYPES_%s = "%s"' % (self.machine, " ".join(types.keys())))
 
     def checkhashes(self, missed, ret, sq_fn, sq_task, sq_hash, sq_hashfn, d):
         warn_msgs = []
@@ -218,7 +220,7 @@ class SignatureGeneratorOEBasicHash(bb.siggen.SignatureGeneratorBasicHash):
         for task in range(len(sq_fn)):
             if task not in ret:
                 for pn in self.lockedsigs:
-                    if sq_hash[task] in iter(self.lockedsigs[pn].values()):
+                    if sq_hash[task] in self.lockedsigs[pn].itervalues():
                         if sq_task[task] == 'do_shared_workdir':
                             continue
                         sstate_missing_msgs.append("Locked sig is set for %s:%s (%s) yet not in sstate cache?"

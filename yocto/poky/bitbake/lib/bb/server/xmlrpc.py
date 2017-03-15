@@ -31,33 +31,31 @@
     in the server's main loop.
 """
 
-import os
-import sys
-
-import hashlib
-import time
-import socket
-import signal
-import threading
-import pickle
-import inspect
-import select
-import http.client
-import xmlrpc.client
-from xmlrpc.server import SimpleXMLRPCServer, SimpleXMLRPCRequestHandler
-
 import bb
+import xmlrpclib, sys
 from bb import daemonize
 from bb.ui import uievent
-from . import BitBakeBaseServer, BitBakeBaseServerConnection, BaseImplServer
+import hashlib, time
+import socket
+import os, signal
+import threading
+try:
+    import cPickle as pickle
+except ImportError:
+    import pickle
 
 DEBUG = False
 
-class BBTransport(xmlrpc.client.Transport):
+from SimpleXMLRPCServer import SimpleXMLRPCServer, SimpleXMLRPCRequestHandler
+import inspect, select, httplib
+
+from . import BitBakeBaseServer, BitBakeBaseServerConnection, BaseImplServer
+
+class BBTransport(xmlrpclib.Transport):
     def __init__(self, timeout):
         self.timeout = timeout
         self.connection_token = None
-        xmlrpc.client.Transport.__init__(self)
+        xmlrpclib.Transport.__init__(self)
 
     # Modified from default to pass timeout to HTTPConnection
     def make_connection(self, host):
@@ -69,7 +67,7 @@ class BBTransport(xmlrpc.client.Transport):
         # create a HTTP connection object from a host descriptor
         chost, self._extra_headers, x509 = self.get_host_info(host)
         #store the host argument along with the connection object
-        self._connection = host, http.client.HTTPConnection(chost, timeout=self.timeout)
+        self._connection = host, httplib.HTTPConnection(chost, timeout=self.timeout)
         return self._connection[1]
 
     def set_connection_token(self, token):
@@ -78,29 +76,12 @@ class BBTransport(xmlrpc.client.Transport):
     def send_content(self, h, body):
         if self.connection_token:
             h.putheader("Bitbake-token", self.connection_token)
-        xmlrpc.client.Transport.send_content(self, h, body)
+        xmlrpclib.Transport.send_content(self, h, body)
 
 def _create_server(host, port, timeout = 60):
     t = BBTransport(timeout)
-    s = xmlrpc.client.ServerProxy("http://%s:%d/" % (host, port), transport=t, allow_none=True, use_builtin_types=True)
+    s = xmlrpclib.ServerProxy("http://%s:%d/" % (host, port), transport=t, allow_none=True)
     return s, t
-
-def check_connection(remote, timeout):
-    try:
-        host, port = remote.split(":")
-        port = int(port)
-    except Exception as e:
-        bb.warn("Failed to read remote definition (%s)" % str(e))
-        raise e
-
-    server, _transport = _create_server(host, port, timeout)
-    try:
-        ret, err =  server.runCommand(['getVariable', 'TOPDIR'])
-        if err or not ret:
-            return False
-    except ConnectionError:
-        return False
-    return True
 
 class BitBakeServerCommands():
 
@@ -147,7 +128,7 @@ class BitBakeServerCommands():
     def addClient(self):
         if self.has_client:
             return None
-        token = hashlib.md5(str(time.time()).encode("utf-8")).hexdigest()
+        token = hashlib.md5(str(time.time())).hexdigest()
         self.server.set_connection_token(token)
         self.has_client = True
         return token
@@ -197,7 +178,7 @@ class XMLRPCProxyServer(BaseImplServer):
     """ not a real working server, but a stub for a proxy server connection
 
     """
-    def __init__(self, host, port, use_builtin_types=True):
+    def __init__(self, host, port):
         self.host = host
         self.port = port
 
@@ -205,7 +186,7 @@ class XMLRPCServer(SimpleXMLRPCServer, BaseImplServer):
     # remove this when you're done with debugging
     # allow_reuse_address = True
 
-    def __init__(self, interface, single_use=False, idle_timeout=0):
+    def __init__(self, interface, single_use=False):
         """
         Constructor
         """
@@ -223,10 +204,6 @@ class XMLRPCServer(SimpleXMLRPCServer, BaseImplServer):
         self.commands = BitBakeServerCommands(self)
         self.autoregister_all_functions(self.commands, "")
         self.interface = interface
-        self.time = time.time()
-        self.idle_timeout = idle_timeout
-        if idle_timeout:
-            self.register_idle_function(self.handle_idle_timeout, self)
 
     def addcooker(self, cooker):
         BaseImplServer.addcooker(self, cooker)
@@ -242,12 +219,6 @@ class XMLRPCServer(SimpleXMLRPCServer, BaseImplServer):
             if name.startswith(prefix):
                 self.register_function(method, name[len(prefix):])
 
-    def handle_idle_timeout(self, server, data, abort):
-        if not abort:
-            if time.time() - server.time > server.idle_timeout:
-                server.quit = True
-                print("Server idle timeout expired")
-        return []
 
     def serve_forever(self):
         # Start the actual XMLRPC server
@@ -261,7 +232,7 @@ class XMLRPCServer(SimpleXMLRPCServer, BaseImplServer):
         while not self.quit:
             fds = [self]
             nextsleep = 0.1
-            for function, data in list(self._idlefuns.items()):
+            for function, data in self._idlefuns.items():
                 retval = None
                 try:
                     retval = function(self, data, False)
@@ -290,15 +261,13 @@ class XMLRPCServer(SimpleXMLRPCServer, BaseImplServer):
             try:
                 fd_sets = select.select(fds, [], [], socktimeout)
                 if fd_sets[0] and self in fd_sets[0]:
-                    if self.idle_timeout:
-                        self.time = time.time()
                     self._handle_request_noblock()
             except IOError:
                 # we ignore interrupted calls
                 pass
 
         # Tell idle functions we're exiting
-        for function, data in list(self._idlefuns.items()):
+        for function, data in self._idlefuns.items():
             try:
                 retval = function(self, data, True)
             except:
@@ -363,10 +332,9 @@ class BitBakeXMLRPCServerConnection(BitBakeBaseServerConnection):
             pass
 
 class BitBakeServer(BitBakeBaseServer):
-    def initServer(self, interface = ("localhost", 0),
-                   single_use = False, idle_timeout=0):
+    def initServer(self, interface = ("localhost", 0), single_use = False):
         self.interface = interface
-        self.serverImpl = XMLRPCServer(interface, single_use, idle_timeout)
+        self.serverImpl = XMLRPCServer(interface, single_use)
 
     def detach(self):
         daemonize.createDaemon(self.serverImpl.serve_forever, "bitbake-cookerdaemon.log")
@@ -411,7 +379,7 @@ class BitBakeXMLRPCClient(BitBakeBaseServer):
             bb.warn("Could not create socket for %s:%s (%s)" % (host, port, str(e)))
             raise e
         try:
-            self.serverImpl = XMLRPCProxyServer(host, port, use_builtin_types=True)
+            self.serverImpl = XMLRPCProxyServer(host, port)
             self.connection = BitBakeXMLRPCServerConnection(self.serverImpl, (ip, 0), self.observer_only, featureset)
             return self.connection.connect(self.token)
         except Exception as e:

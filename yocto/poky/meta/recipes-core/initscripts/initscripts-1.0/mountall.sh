@@ -33,7 +33,7 @@ kill -USR1 1
 # Execute swapon command again, in case we want to swap to
 # a file on a now mounted filesystem.
 #
-[ -x /sbin/swapon ] && swapon -a
+swapon -a 2> /dev/null
 
 : exit 0
 

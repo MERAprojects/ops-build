@@ -45,7 +45,7 @@ python do_lint() {
 
     def findKey(path, key):
         ret = True
-        f = open('%s' % path, mode = 'r')
+        f = file('%s' % path, mode = 'r')
         line = f.readline()
         while line:
             if line.find(key) != -1:

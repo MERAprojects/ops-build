@@ -22,7 +22,7 @@
 from toastergui.widgets import ToasterTable
 from orm.models import Recipe, ProjectLayer, Layer_Version, Machine, Project
 from orm.models import CustomImageRecipe, Package, Target, Build, LogMessage, Task
-from orm.models import CustomImagePackage, Package_DependencyManager
+from orm.models import CustomImagePackage
 from django.db.models import Q, Max, Sum, Count, When, Case, Value, IntegerField
 from django.conf.urls import url
 from django.core.urlresolvers import reverse, resolve
@@ -114,37 +114,28 @@ class LayersTable(ToasterTable):
 
         git_url_template = '''
         <a href="{% url 'layerdetails' extra.pid data.id %}">
-        {% if data.layer.local_source_dir %}
-          <code>{{data.layer.local_source_dir}}</code>
-        {% else %}
           <code>{{data.layer.vcs_url}}</code>
         </a>
-        {% endif %}
         {% if data.get_vcs_link_url %}
         <a target="_blank" href="{{ data.get_vcs_link_url }}">
-           <span class="glyphicon glyphicon-new-window"></span>
+           <i class="icon-share get-info"></i>
         </a>
         {% endif %}
         '''
 
-        self.add_column(title="Layer source code location",
-                        help_text="A Git repository or an absolute path to a directory",
+        self.add_column(title="Git repository URL",
+                        help_text="The Git repository for the layer source code",
                         hidden=True,
                         static_data_name="layer__vcs_url",
                         static_data_template=git_url_template)
 
         git_dir_template = '''
-        {% if data.layer.local_source_dir %}
-        <span class="text-muted">Not applicable</span>
-        <span class="glyphicon glyphicon-question-sign get-help" data-original-title="" title="The source code of {{data.layer.name}} is not in a Git repository, so there is no subdirectory associated with it"> </span>
-        {% else %}
         <a href="{% url 'layerdetails' extra.pid data.id %}">
          <code>{{data.dirpath}}</code>
         </a>
-        {% endif %}
         {% if data.dirpath and data.get_vcs_dirpath_link_url %}
         <a target="_blank" href="{{ data.get_vcs_dirpath_link_url }}">
-          <span class="glyphicon glyphicon-new-window"></span>
+          <i class="icon-share get-info"></i>
         </a>
         {% endif %}'''
 
@@ -155,14 +146,16 @@ class LayersTable(ToasterTable):
                         static_data_template=git_dir_template)
 
         revision_template =  '''
-        {% if data.layer.local_source_dir %}
-        <span class="text-muted">Not applicable</span>
-        <span class="glyphicon glyphicon-question-sign get-help" data-original-title="" title="The source code of {{data.layer.name}} is not in a Git repository, so there is no revision associated with it"> </span>
-        {% else %}
+        {% load projecttags  %}
         {% with vcs_ref=data.get_vcs_reference %}
-        {% include 'snippets/gitrev_popover.html' %}
-        {% endwith %}
+        {% if vcs_ref|is_shaid %}
+        <a class="btn" data-content="<ul class='unstyled'> <li>{{vcs_ref}}</li> </ul>">
+        {{vcs_ref|truncatechars:10}}
+        </a>
+        {% else %}
+        {{vcs_ref}}
         {% endif %}
+        {% endwith %}
         '''
 
         self.add_column(title="Git revision",
@@ -173,8 +166,8 @@ class LayersTable(ToasterTable):
         deps_template = '''
         {% with ods=data.dependencies.all%}
         {% if ods.count %}
-            <a class="btn btn-default" title="<a href='{% url "layerdetails" extra.pid data.id %}'>{{data.layer.name}}</a> dependencies"
-        data-content="<ul class='list-unstyled'>
+            <a class="btn" title="<a href='{% url "layerdetails" extra.pid data.id %}'>{{data.layer.name}}</a> dependencies"
+        data-content="<ul class='unstyled'>
         {% for i in ods%}
         <li><a href='{% url "layerdetails" extra.pid i.depends_on.pk %}'>{{i.depends_on.layer.name}}</a></li>
         {% endfor %}
@@ -197,13 +190,24 @@ class LayersTable(ToasterTable):
                         static_data_name="add-del-layers",
                         static_data_template='{% include "layer_btn.html" %}')
 
+        project = Project.objects.get(pk=kwargs['pid'])
+        self.add_column(title="LayerDetailsUrl",
+                        displayable = False,
+                        field_name="layerdetailurl",
+                        computation = lambda x: reverse('layerdetails', args=(project.id, x.id)))
+
+        self.add_column(title="name",
+                        displayable = False,
+                        field_name="name",
+                        computation = lambda x: x.layer.name)
+
 
 class MachinesTable(ToasterTable):
     """Table of Machines in Toaster"""
 
     def __init__(self, *args, **kwargs):
         super(MachinesTable, self).__init__(*args, **kwargs)
-        self.empty_state = "Toaster has no machine information for this project. Sadly, 			   machine information cannot be obtained from builds, so this 				  page will remain empty."
+        self.empty_state = "No machines maybe you need to do a build?"
         self.title = "Compatible machines"
         self.default_orderby = "name"
 
@@ -271,7 +275,7 @@ class MachinesTable(ToasterTable):
                         field_name="layer_version__get_vcs_reference")
 
         machine_file_template = '''<code>conf/machine/{{data.name}}.conf</code>
-        <a href="{{data.get_vcs_machine_file_link_url}}" target="_blank"><span class="glyphicon glyphicon-new-window"></i></a>'''
+        <a href="{{data.get_vcs_machine_file_link_url}}" target="_blank"><i class="icon-share get-info"></i></a>'''
 
         self.add_column(title="Machine file",
                         hidden=True,
@@ -314,11 +318,7 @@ class LayerMachinesTable(MachinesTable):
         self.add_column(title="Description",
                         field_name="description")
 
-        select_btn_template = '''
-        <a href="{% url "project" extra.pid %}?setMachine={{data.name}}"
-        class="btn btn-default btn-block select-machine-btn
-        {% if extra.in_prj == 0%}disabled{%endif%}">Select machine</a>
-        '''
+        select_btn_template = '<a href="{% url "project" extra.pid %}?setMachine={{data.name}}" class="btn btn-block select-machine-btn" {% if extra.in_prj == 0%}disabled="disabled"{%endif%}>Select machine</a>'
 
         self.add_column(title="Select machine",
                         static_data_name="add-del-layers",
@@ -330,10 +330,10 @@ class RecipesTable(ToasterTable):
 
     def __init__(self, *args, **kwargs):
         super(RecipesTable, self).__init__(*args, **kwargs)
-        self.empty_state = "Toaster has no recipe information. To generate recipe information you need to run a build."
+        self.empty_state = "Toaster has no recipe information. To generate recipe information you can configure a layer source then run a build."
 
     build_col = { 'title' : "Build",
-            'help_text' : "Before building a recipe, you might need to add the corresponding layer to your project",
+            'help_text' : "Add or delete recipes to and from your project",
             'hideable' : False,
             'filter_name' : "in_current_project",
             'static_data_name' : "add-del-layers",
@@ -344,7 +344,8 @@ class RecipesTable(ToasterTable):
         context = super(RecipesTable, self).get_context_data(**kwargs)
 
         context['project'] = project
-        context['projectlayers'] = [player.layercommit.id for player in ProjectLayer.objects.filter(project=context['project'])]
+
+        context['projectlayers'] = map(lambda prjlayer: prjlayer.layercommit.id, ProjectLayer.objects.filter(project=context['project']))
 
         return context
 
@@ -394,7 +395,7 @@ class RecipesTable(ToasterTable):
         recipe_file_template = '''
         <code>{{data.file_path}}</code>
         <a href="{{data.get_vcs_recipe_file_link_url}}" target="_blank">
-          <span class="glyphicon glyphicon-new-window"></i>
+          <i class="icon-share get-info"></i>
         </a>
          '''
 
@@ -427,19 +428,9 @@ class RecipesTable(ToasterTable):
                         orderable=True,
                         field_name="license")
 
-        revision_link_template = '''
-        {% if data.layer_version.layer.local_source_dir %}
-        <span class="text-muted">Not applicable</span>
-        <span class="glyphicon glyphicon-question-sign get-help" data-original-title="" title="The source code of {{data.layer_version.layer.name}} is not in a Git repository, so there is no revision associated with it"> </span>
-        {% else %}
-        {{data.layer_version.get_vcs_reference}}
-        {% endif %}
-        '''
-
         self.add_column(title="Git revision",
                         hidden=True,
-                        static_data_name="layer_version__get_vcs_reference",
-                        static_data_template=revision_link_template)
+                        field_name="layer_version__get_vcs_reference")
 
 
 class LayerRecipesTable(RecipesTable):
@@ -475,11 +466,7 @@ class LayerRecipesTable(RecipesTable):
         self.add_column(title="Description",
                         field_name="get_description_or_summary")
 
-        build_recipe_template = '''
-        <a class="btn btn-default btn-block build-recipe-btn
-        {% if extra.in_prj == 0 %}disabled{% endif %}"
-        data-recipe-name="{{data.name}}">Build recipe</a>
-        '''
+        build_recipe_template ='<button class="btn btn-block build-recipe-btn" data-recipe-name="{{data.name}}" {%if extra.in_prj == 0 %}disabled="disabled"{%endif%}>Build recipe</button>'
 
         self.add_column(title="Build recipe",
                         static_data_name="add-del-layers",
@@ -494,16 +481,7 @@ class CustomImagesTable(ToasterTable):
 
     def get_context_data(self, **kwargs):
         context = super(CustomImagesTable, self).get_context_data(**kwargs)
-
-        empty_state_template = '''
-        You have not created any custom images yet.
-        <a href="{% url 'newcustomimage' data.pid %}">
-        Create your first custom image</a>
-        '''
-        context['empty_state'] = self.render_static_data(empty_state_template,
-                                                         kwargs)
         project = Project.objects.get(pk=kwargs['pid'])
-
         # TODO put project into the ToasterTable base class
         context['project'] = project
         return context
@@ -529,31 +507,29 @@ class CustomImagesTable(ToasterTable):
                         static_data_template=name_link_template)
 
         recipe_file_template = '''
-        {% if data.get_base_recipe_file %}
         <code>{{data.name}}_{{data.version}}.bb</code>
-        <a href="{% url 'customrecipedownload' extra.pid data.pk %}"
-        class="glyphicon glyphicon-download-alt get-help" title="Download recipe file"></a>
-        {% endif %}'''
+        <a href="{% url 'customrecipedownload' extra.pid data.pk %}">
+        <i class="icon-download-alt" data-original-title="Download recipe
+        file"></i>
+        </a>'''
 
         self.add_column(title="Recipe file",
                         static_data_name='recipe_file_download',
                         static_data_template=recipe_file_template)
 
         approx_packages_template = '''
-        {% if data.get_all_packages.count > 0 %}
         <a href="{% url 'customrecipe' extra.pid data.id %}">
           {{data.get_all_packages.count}}
-        </a>
-        {% endif %}'''
+        </a>'''
 
-        self.add_column(title="Packages",
+        self.add_column(title="Approx packages",
                         static_data_name='approx_packages',
                         static_data_template=approx_packages_template)
 
 
         build_btn_template = '''
         <button data-recipe-name="{{data.name}}"
-        class="btn btn-default btn-block build-recipe-btn">
+        class="btn btn-block build-recipe-btn" style="margin-top: 5px;" >
         Build
         </button>'''
 
@@ -719,7 +695,6 @@ class PackagesTable(ToasterTable):
 
     def setup_queryset(self, *args, **kwargs):
         recipe = Recipe.objects.get(pk=kwargs['recipe_id'])
-        self.static_context_extra['target_name'] = recipe.name
 
         self.queryset = self.create_package_list(recipe, kwargs['pid'])
         self.queryset = self.queryset.order_by('name')
@@ -736,15 +711,13 @@ class PackagesTable(ToasterTable):
 
         self.add_column(title="Approx Size",
                         orderable=True,
-                        field_name="size",
                         static_data_name="size",
                         static_data_template="{% load projecttags %} \
                         {{data.size|filtered_filesizeformat}}")
 
         self.add_column(title="License",
                         field_name="license",
-                        orderable=True,
-                        hidden=True)
+                        orderable=True)
 
 
         self.add_column(title="Dependencies",
@@ -791,19 +764,7 @@ class SelectPackagesTable(PackagesTable):
 
         self.queryset = self.queryset.order_by('name')
 
-        # This target is the target used to work out which group of dependences
-        # to display, if we've built the custom image we use it otherwise we
-        # can use the based recipe instead
-        if prj.build_set.filter(target__target=self.cust_recipe.name).count()\
-           > 0:
-            self.static_context_extra['target_name'] = self.cust_recipe.name
-        else:
-            self.static_context_extra['target_name'] =\
-                    Package_DependencyManager.TARGET_LATEST
-
         self.static_context_extra['recipe_id'] = kwargs['custrecipeid']
-
-
         self.static_context_extra['current_packages'] = \
                 current_packages.values_list('pk', flat=True)
 
@@ -899,22 +860,26 @@ class ProjectsTable(ToasterTable):
         last_activity_on_template = '''
         {% load project_url_tag %}
         <span data-project-field="updated">
+          <a href="{% project_url data %}">
             {{data.updated | date:"d/m/y H:i"}}
+          </a>
         </span>
         '''
 
         release_template = '''
         <span data-project-field="release">
           {% if data.release %}
-            {{data.release.name}}
+            <a href="{% url 'project' data.id %}#project-details">
+                {{data.release.name}}
+            </a>
           {% elif data.is_default %}
-            <span class="text-muted">Not applicable</span>
-            <span class="glyphicon glyphicon-question-sign get-help hover-help"
-               title="This project does not have a release set.
+            <span class="muted">Not applicable</span>
+            <i class="icon-question-sign get-help hover-help"
+               data-original-title="This project does not have a release set.
                It simply collects information about the builds you start from
                the command line while Toaster is running"
                style="visibility: hidden;">
-            </span>
+            </i>
           {% else %}
             No release available
           {% endif %}
@@ -924,14 +889,16 @@ class ProjectsTable(ToasterTable):
         machine_template = '''
         <span data-project-field="machine">
           {% if data.is_default %}
-            <span class="text-muted">Not applicable</span>
-            <span class="glyphicon glyphicon-question-sign get-help hover-help"
-               title="This project does not have a machine
+            <span class="muted">Not applicable</span>
+            <i class="icon-question-sign get-help hover-help"
+               data-original-title="This project does not have a machine
                set. It simply collects information about the builds you
                start from the command line while Toaster is running"
-               style="visibility: hidden;"></span>
+               style="visibility: hidden;"></i>
           {% else %}
-            {{data.get_current_machine_name}}
+            <a href="{% url 'project' data.id %}#machine-distro">
+              {{data.get_current_machine_name}}
+            </a>
           {% endif %}
         </span>
         '''
@@ -941,16 +908,20 @@ class ProjectsTable(ToasterTable):
           <a href="{% url 'projectbuilds' data.id %}">
             {{data.get_number_of_builds}}
           </a>
+        {% else %}
+          <span class="muted">0</span>
         {% endif %}
         '''
 
         last_build_outcome_template = '''
         {% if data.get_number_of_builds > 0 %}
-          {% if data.get_last_outcome == extra.Build.SUCCEEDED %}
-            <span class="glyphicon glyphicon-ok-circle"></span>
-          {% elif data.get_last_outcome == extra.Build.FAILED %}
-            <span class="glyphicon glyphicon-minus-sign"></span>
-          {% endif %}
+          <a href="{% url 'builddashboard' data.get_last_build_id %}">
+            {% if data.get_last_outcome == extra.Build.SUCCEEDED %}
+              <i class="icon-ok-sign success"></i>
+            {% elif data.get_last_outcome == extra.Build.FAILED %}
+              <i class="icon-minus-sign error"></i>
+            {% endif %}
+          </a>
         {% endif %}
         '''
 
@@ -964,7 +935,7 @@ class ProjectsTable(ToasterTable):
 
         errors_template = '''
         {% if data.get_number_of_builds > 0 and data.get_last_errors > 0 %}
-          <a class="errors.count text-danger"
+          <a class="errors.count error"
              href="{% url "builddashboard" data.get_last_build_id %}#errors">
             {{data.get_last_errors}} error{{data.get_last_errors | pluralize}}
           </a>
@@ -973,7 +944,7 @@ class ProjectsTable(ToasterTable):
 
         warnings_template = '''
         {% if data.get_number_of_builds > 0 and data.get_last_warnings > 0 %}
-          <a class="warnings.count text-warning"
+          <a class="warnings.count warning"
              href="{% url "builddashboard" data.get_last_build_id %}#warnings">
             {{data.get_last_warnings}} warning{{data.get_last_warnings | pluralize}}
           </a>
@@ -982,7 +953,9 @@ class ProjectsTable(ToasterTable):
 
         image_files_template = '''
         {% if data.get_number_of_builds > 0 and data.get_last_outcome == extra.Build.SUCCEEDED %}
-          {{data.get_last_build_extensions}}
+          <a href="{% url "builddashboard" data.get_last_build_id %}#images">
+            {{data.get_last_build_extensions}}
+          </a>
         {% endif %}
         '''
 
@@ -1018,7 +991,7 @@ class ProjectsTable(ToasterTable):
                         static_data_name='machine',
                         static_data_template=machine_template)
 
-        self.add_column(title='Builds',
+        self.add_column(title='Number of builds',
                         help_text='The number of builds which have been run \
                                    for the project',
                         hideable=False,
@@ -1148,17 +1121,19 @@ class BuildsTable(ToasterTable):
 
     def setup_columns(self, *args, **kwargs):
         outcome_template = '''
-        {% if data.outcome == data.SUCCEEDED %}
-            <span class="glyphicon glyphicon-ok-circle"></span>
-        {% elif data.outcome == data.FAILED %}
-            <span class="glyphicon glyphicon-minus-sign"></span>
-        {% endif %}
+        <a href="{% url "builddashboard" data.id %}">
+            {% if data.outcome == data.SUCCEEDED %}
+                <i class="icon-ok-sign success"></i>
+            {% elif data.outcome == data.FAILED %}
+                <i class="icon-minus-sign error"></i>
+            {% endif %}
+        </a>
 
         {% if data.cooker_log_path %}
             &nbsp;
             <a href="{% url "build_artifact" data.id "cookerlog" data.id %}">
-               <span class="glyphicon glyphicon-download-alt get-help"
-               data-original-title="Download build log"></span>
+               <i class="icon-download-alt get-help"
+               data-original-title="Download build log"></i>
             </a>
         {% endif %}
         '''
@@ -1173,39 +1148,45 @@ class BuildsTable(ToasterTable):
         '''
 
         machine_template = '''
-        {{data.machine}}
+        <a href="{% url "builddashboard" data.id %}">
+            {{data.machine}}
+        </a>
         '''
 
         started_on_template = '''
-        {{data.started_on | date:"d/m/y H:i"}}
+        <a href="{% url "builddashboard" data.id %}">
+            {{data.started_on | date:"d/m/y H:i"}}
+        </a>
         '''
 
         completed_on_template = '''
-        {{data.completed_on | date:"d/m/y H:i"}}
+        <a href="{% url "builddashboard" data.id %}">
+            {{data.completed_on | date:"d/m/y H:i"}}
+        </a>
         '''
 
         failed_tasks_template = '''
         {% if data.failed_tasks.count == 1 %}
-            <a class="text-danger" href="{% url "task" data.id data.failed_tasks.0.id %}">
-                <span>
-                    {{data.failed_tasks.0.recipe.name}} {{data.failed_tasks.0.task_name}}
+            <a href="{% url "task" data.id data.failed_tasks.0.id %}">
+                <span class="error">
+                    {{data.failed_tasks.0.recipe.name}}.{{data.failed_tasks.0.task_name}}
                 </span>
             </a>
             <a href="{% url "build_artifact" data.id "tasklogfile" data.failed_tasks.0.id %}">
-                <span class="glyphicon glyphicon-download-alt get-help"
-                   title="Download task log file">
-                </span>
+                <i class="icon-download-alt"
+                   data-original-title="Download task log file">
+                </i>
             </a>
         {% elif data.failed_tasks.count > 1 %}
             <a href="{% url "tasks" data.id %}?filter=outcome%3A{{extra.Task.OUTCOME_FAILED}}">
-                <span class="text-danger">{{data.failed_tasks.count}} tasks</span>
+                <span class="error">{{data.failed_tasks.count}} tasks</span>
             </a>
         {% endif %}
         '''
 
         errors_template = '''
         {% if data.errors_no %}
-            <a class="errors.count text-danger" href="{% url "builddashboard" data.id %}#errors">
+            <a class="errors.count error" href="{% url "builddashboard" data.id %}#errors">
                 {{data.errors_no}} error{{data.errors_no|pluralize}}
             </a>
         {% endif %}
@@ -1213,7 +1194,7 @@ class BuildsTable(ToasterTable):
 
         warnings_template = '''
         {% if data.warnings_no %}
-            <a class="warnings.count text-warning" href="{% url "builddashboard" data.id %}#warnings">
+            <a class="warnings.count warning" href="{% url "builddashboard" data.id %}#warnings">
                 {{data.warnings_no}} warning{{data.warnings_no|pluralize}}
             </a>
         {% endif %}
@@ -1221,18 +1202,16 @@ class BuildsTable(ToasterTable):
 
         time_template = '''
         {% load projecttags %}
-        {% if data.outcome == extra.Build.SUCCEEDED %}
-            <a href="{% url "buildtime" data.id %}">
-                {{data.timespent_seconds | sectohms}}
-            </a>
-        {% else %}
+        <a href="{% url "buildtime" data.id %}">
             {{data.timespent_seconds | sectohms}}
-        {% endif %}
+        </a>
         '''
 
         image_files_template = '''
         {% if data.outcome == extra.Build.SUCCEEDED %}
+          <a href="{% url "builddashboard" data.id %}#images">
             {{data.get_image_file_extensions}}
+          </a>
         {% endif %}
         '''
 
@@ -1450,10 +1429,10 @@ class AllBuildsTable(BuildsTable):
             {{data.project.name}}
         </a>
         {% if data.project.is_default %}
-            <span class="glyphicon glyphicon-question-sign get-help hover-help" title=""
+            <i class="icon-question-sign get-help hover-help" title=""
                data-original-title="This project shows information about
                the builds you start from the command line while Toaster is
-               running" style="visibility: hidden;"></span>
+               running" style="visibility: hidden;"></i>
         {% endif %}
         '''
 
@@ -1503,6 +1482,7 @@ class ProjectBuildsTable(BuildsTable):
         """
         self.project_id = kwargs['pid']
         super(ProjectBuildsTable, self).setup_queryset(*args, **kwargs)
+
         project = Project.objects.get(pk=self.project_id)
         self.queryset = self.queryset.filter(project=project)
 
@@ -1516,23 +1496,8 @@ class ProjectBuildsTable(BuildsTable):
         self.project_id = kwargs['pid']
         context = super(ProjectBuildsTable, self).get_context_data(**kwargs)
 
-        empty_state_template = '''
-        This project has no builds.
-        <a href="{% url 'projectimagerecipes' data.pid %}">
-        Choose a recipe to build</a>
-        '''
-        context['empty_state'] = self.render_static_data(empty_state_template,
-                                                         kwargs)
-
         project = Project.objects.get(pk=self.project_id)
         context['mru'] = Build.get_recent(project)
         context['project'] = project
-
-        self.setup_queryset(**kwargs)
-        if self.queryset.count() == 0 and \
-           project.build_set.filter(outcome=Build.IN_PROGRESS).count() > 0:
-            context['build_in_progress_none_completed'] = True
-        else:
-            context['build_in_progress_none_completed'] = False
 
         return context

@@ -1,6 +1,5 @@
 SUMMARY = "Pulls in pkgdata for world"
 LICENSE = "MIT"
-
 INHIBIT_DEFAULT_DEPS = "1"
 
 addtask do_allpackagedata before do_build

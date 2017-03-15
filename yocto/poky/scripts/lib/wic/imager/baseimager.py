@@ -16,6 +16,7 @@
 # with this program; if not, write to the Free Software Foundation, Inc., 59
 # Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 
+from __future__ import with_statement
 import os
 import tempfile
 import shutil
@@ -24,7 +25,7 @@ from wic import msger
 from wic.utils.errors import CreatorError
 from wic.utils import runner
 
-class BaseImageCreator():
+class BaseImageCreator(object):
     """Base class for image creation.
 
     BaseImageCreator is the simplest creator class available; it will
@@ -67,7 +68,7 @@ class BaseImageCreator():
                      }
 
             # update setting from createopts
-            for key in createopts:
+            for key in createopts.keys():
                 if key in optmap:
                     option = optmap[key]
                 else:

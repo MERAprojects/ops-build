@@ -1,7 +1,6 @@
 UPDATERCPN ?= "${PN}"
 
-DEPENDS_append_class-target = "${@bb.utils.contains('DISTRO_FEATURES', 'sysvinit', ' update-rc.d-native update-rc.d initscripts', '', d)}"
-
+DEPENDS_append_class-target = " update-rc.d-native update-rc.d initscripts"
 UPDATERCD = "update-rc.d"
 UPDATERCD_class-cross = ""
 UPDATERCD_class-native = ""
@@ -13,7 +12,7 @@ INIT_D_DIR = "${sysconfdir}/init.d"
 
 updatercd_preinst() {
 if [ -z "$D" -a -f "${INIT_D_DIR}/${INITSCRIPT_NAME}" ]; then
-	${INIT_D_DIR}/${INITSCRIPT_NAME} stop || :
+	${INIT_D_DIR}/${INITSCRIPT_NAME} stop
 fi
 if type update-rc.d >/dev/null 2>/dev/null; then
 	if [ -n "$D" ]; then
@@ -26,7 +25,6 @@ fi
 }
 
 updatercd_postinst() {
-# Begin section update-rc.d
 if type update-rc.d >/dev/null 2>/dev/null; then
 	if [ -n "$D" ]; then
 		OPT="-r $D"
@@ -35,15 +33,12 @@ if type update-rc.d >/dev/null 2>/dev/null; then
 	fi
 	update-rc.d $OPT ${INITSCRIPT_NAME} ${INITSCRIPT_PARAMS}
 fi
-# End section update-rc.d
 }
 
 updatercd_prerm() {
-# Begin section update-rc.d
-if [ -z "$D" -a -x "${INIT_D_DIR}/${INITSCRIPT_NAME}" ]; then
-	${INIT_D_DIR}/${INITSCRIPT_NAME} stop || :
+if [ -z "$D" ]; then
+	${INIT_D_DIR}/${INITSCRIPT_NAME} stop
 fi
-# End section update-rc.d
 }
 
 updatercd_postrm() {
@@ -61,15 +56,15 @@ fi
 def update_rc_after_parse(d):
     if d.getVar('INITSCRIPT_PACKAGES', False) == None:
         if d.getVar('INITSCRIPT_NAME', False) == None:
-            bb.fatal("%s inherits update-rc.d but doesn't set INITSCRIPT_NAME" % d.getVar('FILE', False))
+            raise bb.build.FuncFailed("%s inherits update-rc.d but doesn't set INITSCRIPT_NAME" % d.getVar('FILE', False))
         if d.getVar('INITSCRIPT_PARAMS', False) == None:
-            bb.fatal("%s inherits update-rc.d but doesn't set INITSCRIPT_PARAMS" % d.getVar('FILE', False))
+            raise bb.build.FuncFailed("%s inherits update-rc.d but doesn't set INITSCRIPT_PARAMS" % d.getVar('FILE', False))
 
 python __anonymous() {
     update_rc_after_parse(d)
 }
 
-PACKAGESPLITFUNCS_prepend = "${@bb.utils.contains('DISTRO_FEATURES', 'sysvinit', 'populate_packages_updatercd ', '', d)}"
+PACKAGESPLITFUNCS_prepend = "populate_packages_updatercd "
 PACKAGESPLITFUNCS_remove_class-nativesdk = "populate_packages_updatercd "
 
 populate_packages_updatercd[vardeps] += "updatercd_prerm updatercd_postrm updatercd_preinst updatercd_postinst"
@@ -106,25 +101,13 @@ python populate_packages_updatercd () {
         postinst = d.getVar('pkg_postinst_%s' % pkg, True)
         if not postinst:
             postinst = '#!/bin/sh\n'
-        postinst = postinst.splitlines(True)
-        try:
-            index = postinst.index('# End section update-alternatives\n')
-            postinst.insert(index + 1, localdata.getVar('updatercd_postinst', True))
-        except ValueError:
-            postinst.append(localdata.getVar('updatercd_postinst', True))
-        postinst = ''.join(postinst)
+        postinst += localdata.getVar('updatercd_postinst', True)
         d.setVar('pkg_postinst_%s' % pkg, postinst)
 
         prerm = d.getVar('pkg_prerm_%s' % pkg, True)
         if not prerm:
             prerm = '#!/bin/sh\n'
-        prerm = prerm.splitlines(True)
-        try:
-            index = prerm.index('# Begin section update-alternatives\n')
-            prerm.insert(index, localdata.getVar('updatercd_prerm', True))
-        except ValueError:
-            prerm.append(localdata.getVar('updatercd_prerm', True))
-        prerm = ''.join(prerm)
+        prerm += localdata.getVar('updatercd_prerm', True)
         d.setVar('pkg_prerm_%s' % pkg, prerm)
 
         postrm = d.getVar('pkg_postrm_%s' % pkg, True)
@@ -137,7 +120,8 @@ python populate_packages_updatercd () {
 
     # Check that this class isn't being inhibited (generally, by
     # systemd.bbclass) before doing any work.
-    if not d.getVar("INHIBIT_UPDATERCD_BBCLASS", True):
+    if bb.utils.contains('DISTRO_FEATURES', 'sysvinit', True, False, d) or \
+       not d.getVar("INHIBIT_UPDATERCD_BBCLASS", True):
         pkgs = d.getVar('INITSCRIPT_PACKAGES', True)
         if pkgs == None:
             pkgs = d.getVar('UPDATERCPN', True)

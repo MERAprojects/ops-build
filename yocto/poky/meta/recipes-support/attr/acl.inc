@@ -14,7 +14,6 @@ SRC_URI = "${SAVANNAH_GNU_MIRROR}/acl/${BP}.src.tar.gz \
            file://acl-fix-the-order-of-expected-output-of-getfacl.patch \
            file://test-fix-insufficient-quoting-of.patch \
            file://test-fixups-on-SELinux-machines-for-root-testcases.patch \
-           file://test-fix-directory-permissions.patch \
 "
 
 require ea-acl.inc
@@ -34,7 +33,7 @@ do_install_append() {
 inherit ptest
 
 do_install_ptest() {
-	tar -c --exclude=nfs test/ | ( cd ${D}${PTEST_PATH} && tar -xf - )
+	tar -cf - test/ --exclude nfs | ( cd ${D}${PTEST_PATH} && tar -xf - )
 	mkdir ${D}${PTEST_PATH}/include
 	cp ${S}/include/builddefs ${S}/include/buildmacros ${S}/include/buildrules ${D}${PTEST_PATH}/include/
 }

@@ -52,8 +52,3 @@ oe_multilib_header() {
 oe_multilib_header_class-native () {
 	return
 }
-
-# Nor do we need multilib headers for nativesdk builds.
-oe_multilib_header_class-nativesdk () {
-	return
-}

@@ -15,7 +15,6 @@ function tableInit(ctx){
     orderby : null,
     filter : null,
     search : null,
-    default_orderby: null,
   };
 
   var defaultHiddenCols = [];
@@ -76,21 +75,14 @@ function tableInit(ctx){
 
     if (tableData.total === 0){
       tableContainer.hide();
-      /* No results caused by a search returning nothing */
-      if (tableParams.search) {
-        if ($("#no-results-special-"+ctx.tableName).length > 0) {
-          /* use this page's special no-results form instead of the default */
-          $("#no-results-search-input-"+ctx.tableName).val(tableParams.search);
-          $("#no-results-special-"+ctx.tableName).show();
-          $("#results-found-"+ctx.tableName).hide();
-        } else {
-          $("#new-search-input-"+ctx.tableName).val(tableParams.search);
-          $("#no-results-"+ctx.tableName).show();
-        }
-      }
-      else {
-        /* No results caused by there being no data */
-        $("#empty-state-"+ctx.tableName).show();
+      if ($("#no-results-special-"+ctx.tableName).length > 0) {
+        /* use this page's special no-results form instead of the default */
+        $("#no-results-search-input-"+ctx.tableName).val(tableParams.search);
+        $("#no-results-special-"+ctx.tableName).show();
+        $("#results-found-"+ctx.tableName).hide();
+      } else {
+        $("#new-search-input-"+ctx.tableName).val(tableParams.search);
+        $("#no-results-"+ctx.tableName).show();
       }
       table.trigger("table-done", [tableData.total, tableParams]);
 
@@ -98,7 +90,6 @@ function tableInit(ctx){
     } else {
       tableContainer.show();
       $("#no-results-"+ctx.tableName).hide();
-      $("#empty-state-"+ctx.tableName).hide();
     }
 
     setupTableChrome(tableData);
@@ -110,8 +101,27 @@ function tableInit(ctx){
       var row = $("<tr></tr>");
       column_index = -1;
       for (var key_j in tableData.rows[i]){
+
+        /* if we have a static: version of a key, prefer the static: version for rendering */
+        var orig_key_j = key_j;
+
+        if (key_j.indexOf("static:") === 0) {
+          if (key_j.substr("static:".length) in tableData.rows[i]) {
+            continue;
+          }
+          orig_key_j = key_j.substr("static:".length)
+        } else if (("static:" + key_j) in tableData.rows[i]) {
+          key_j = "static:" + key_j;
+        }
+
+        /* we skip over un-displayable column entries */
+        column_index += 1;
+        if (! tableData.columns[column_index].displayable) {
+          continue;
+        }
+
         var td = $("<td></td>");
-        td.prop("class", key_j);
+        td.prop("class", orig_key_j);
         if (tableData.rows[i][key_j]){
           td.html(tableData.rows[i][key_j]);
         }
@@ -171,15 +181,6 @@ function tableInit(ctx){
     table.css("padding-bottom", 0);
     tableContainer.css("visibility", "visible");
 
-    /* If we have a hash in the url try and highlight that item in the table */
-    if (window.location.hash){
-      var highlight = $("table a[name="+window.location.hash.replace('#',''));
-      if (highlight.length > 0){
-        highlight.parents("tr").addClass('highlight');
-        window.scroll(0, highlight.position().top - 50);
-      }
-    }
-
     table.trigger("table-done", [tableData.total, tableParams]);
   }
 
@@ -187,13 +188,11 @@ function tableInit(ctx){
     if (tableChromeDone === true)
       return;
 
-    var tableHeadRow = table.find("thead > tr");
+    var tableHeadRow = table.find("thead");
     var editColMenu = $("#table-chrome-"+ctx.tableName).find(".editcol");
 
     tableHeadRow.html("");
     editColMenu.html("");
-
-    tableParams.default_orderby = tableData.default_orderby;
 
     if (!tableParams.orderby && tableData.default_orderby){
       tableParams.orderby = tableData.default_orderby;
@@ -210,7 +209,7 @@ function tableInit(ctx){
 
       /* Setup the help text */
       if (col.help_text.length > 0) {
-        var help_text = $('<span class="glyphicon glyphicon-question-sign get-help"> </span>');
+        var help_text = $('<i class="icon-question-sign get-help"> </i>');
         help_text.tooltip({title: col.help_text});
         header.append(help_text);
       }
@@ -220,7 +219,6 @@ function tableInit(ctx){
         var title = $('<a href=\"#\" ></a>');
 
         title.data('field-name', col.field_name);
-        title.attr('data-sort-field', col.field_name);
         title.text(col.title);
         title.click(sortColumnClicked);
 
@@ -248,12 +246,12 @@ function tableInit(ctx){
       } else {
         /* Not orderable */
         header.css("font-weight", "normal");
-        header.append('<span class="text-muted">' + col.title + '</span> ');
+        header.append('<span class="muted">' + col.title + '</span> ');
       }
 
       /* Setup the filter button */
       if (col.filter_name){
-        var filterBtn = $('<a href="#" role="button" data-filter-on="' + col.filter_name + '" class="pull-right btn btn-link btn-xs" data-toggle="modal"><i class="glyphicon glyphicon-filter filtered"></i></a>');
+        var filterBtn = $('<a href="#" role="button" data-filter-on="' + col.filter_name + '" class="pull-right btn btn-mini" data-toggle="modal"><i class="icon-filter filtered"></i></a>');
 
         filterBtn.data('filter-name', col.filter_name);
         filterBtn.prop('id', col.filter_name);
@@ -272,7 +270,7 @@ function tableInit(ctx){
       tableHeadRow.append(header);
 
       /* Now setup the checkbox state and click handler */
-      var toggler = $('<li><div class="checkbox"><label><input type="checkbox" id="checkbox-'+ col.field_name +'" class="col-toggle" value="'+col.field_name+'" />'+col.title+'</label></div></li>');
+      var toggler = $('<li><label class="checkbox">'+col.title+'<input type="checkbox" id="checkbox-'+ col.field_name +'" class="col-toggle" value="'+col.field_name+'" /></label></li>');
 
       var togglerInput = toggler.find("input");
 
@@ -282,8 +280,7 @@ function tableInit(ctx){
       if (col.hideable){
         togglerInput.click(colToggleClicked);
       } else {
-        toggler.find("label").addClass("text-muted");
-        toggler.find("label").parent().addClass("disabled");
+        toggler.find("label").addClass("muted");
         togglerInput.attr("disabled", "disabled");
       }
 
@@ -300,12 +297,11 @@ function tableInit(ctx){
   /* Toggles the active state of the filter button */
   function filterBtnActive(filterBtn, active){
     if (active) {
-      filterBtn.removeClass("btn-link");
       filterBtn.addClass("btn-primary");
 
       filterBtn.tooltip({
           html: true,
-          title: '<button class="btn btn-sm btn-primary" onClick=\'$("#clear-filter-btn-'+ ctx.tableName +'").click();\'>Clear filter</button>',
+          title: '<button class="btn btn-small btn-primary" onClick=\'$("#clear-filter-btn-'+ ctx.tableName +'").click();\'>Clear filter</button>',
           placement: 'bottom',
           delay: {
             hide: 1500,
@@ -314,7 +310,6 @@ function tableInit(ctx){
       });
     } else {
       filterBtn.removeClass("btn-primary");
-      filterBtn.addClass("btn-link");
       filterBtn.tooltip('destroy');
     }
   }
@@ -348,65 +343,29 @@ function tableInit(ctx){
     }
   }
 
-  /* Apply an ordering to the current table.
-   *
-   * 1. Find the column heading matching the sortSpecifier
-   * 2. Set its up/down arrow and add .sorted
-   *
-   * orderby: e.g. "-started_on", "completed_on"
-   * colHeading: column heading element to activate (by showing the caret
-   * up/down, depending on sort order); if not set, the correct column
-   * heading is selected from the DOM using orderby as a key
-   */
-  function applyOrderby(orderby, colHeading) {
-    if (!orderby) {
-      return;
-    }
-
-    // We only have one sort at a time so remove existing sort indicators
-    $("#" + ctx.tableName + " th .icon-caret-down").hide();
-    $("#" + ctx.tableName + " th .icon-caret-up").hide();
-    $("#" + ctx.tableName + " th a").removeClass("sorted");
-
-    // normalise the orderby so we can use it to find the link we want
-    // to style
-    var fieldName = orderby;
-    if (fieldName.indexOf('-') === 0) {
-      fieldName = fieldName.slice(1);
-    }
-
-    // find the table header element which corresponds to the sort field
-    // (if we don't already have it)
-    if (!colHeading) {
-      colHeading = $('[data-sort-field="' + fieldName + '"]');
-    }
-
-    colHeading.addClass("sorted");
-
-    var parent = colHeading.parent();
-
-    if (orderby.indexOf('-') === 0) {
-      parent.children('.icon-caret-up').show();
-    }
-    else {
-      parent.children('.icon-caret-down').show();
-    }
-
-    tableParams.orderby = orderby;
-    loadData(tableParams);
-  }
-
   function sortColumnClicked(e){
     e.preventDefault();
 
+    /* We only have one sort at a time so remove any existing sort indicators */
+    $("#"+ctx.tableName+" th .icon-caret-down").hide();
+    $("#"+ctx.tableName+" th .icon-caret-up").hide();
+    $("#"+ctx.tableName+" th a").removeClass("sorted");
+
+    var fieldName = $(this).data('field-name');
+
     /* if we're already sorted sort the other way */
-    var orderby = $(this).data('field-name');
-    if (tableParams.orderby === orderby &&
+    if (tableParams.orderby === fieldName &&
         tableParams.orderby.indexOf('-') === -1) {
-      orderby = '-' + orderby;
+      tableParams.orderby = '-' + $(this).data('field-name');
+      $(this).parent().children('.icon-caret-up').show();
+    } else {
+      tableParams.orderby = $(this).data('field-name');
+      $(this).parent().children('.icon-caret-down').show();
     }
 
-    applyOrderby(orderby, $(this));
+    $(this).addClass("sorted");
+
+    loadData(tableParams);
   }
 
   function pageButtonClicked(e) {
@@ -425,13 +384,11 @@ function tableInit(ctx){
       table.find("."+col).show();
     }  else {
       table.find("."+col).hide();
-      // If we're ordered by the column we're hiding remove the order by
-      // and apply the default one instead
+      /* If we're ordered by the column we're hiding remove the order by */
       if (col === tableParams.orderby ||
           '-' + col === tableParams.orderby){
         tableParams.orderby = null;
-
-        applyOrderby(tableParams.default_orderby);
+        $("#"+ctx.tableName +" .default-orderby").click();
       }
     }
 
@@ -458,23 +415,23 @@ function tableInit(ctx){
     var hasNoRecords = (Number(filterActionData.count) == 0);
 
     var actionStr = '<div class="radio">' +
-      '<label class="filter-title' +
-      (hasNoRecords ? ' text-muted' : '') + '"' +
-      '       for="' + filterName + '">' +
-      '<input type="radio" name="filter"' +
-      '       value="' + filterName + '"';
+                    '<input type="radio" name="filter"' +
+                    '       value="' + filterName + '"';
 
     if (hasNoRecords) {
       actionStr += ' disabled="disabled"';
     }
 
     actionStr += ' id="' + filterName + '">' +
-      '<input type="hidden" name="filter_value" value="on"' +
-      '       data-value-for="' + filterName + '">' +
-      filterActionData.title +
-      ' (' + filterActionData.count + ')' +
-      '</label>' +
-      '</div>';
+                 '<input type="hidden" name="filter_value" value="on"' +
+                 '       data-value-for="' + filterName + '">' +
+                 '<label class="filter-title' +
+                 (hasNoRecords ? ' muted' : '') + '"' +
+                 '       for="' + filterName + '">' +
+                 filterActionData.title +
+                 ' (' + filterActionData.count + ')' +
+                 '</label>' +
+                 '</div>';
 
     var action = $(actionStr);
 
@@ -508,23 +465,22 @@ function tableInit(ctx){
    */
   function createActionDateRange(filterName, filterValue, filterActionData) {
     var action = $('<div class="radio">' +
-                   '<label class="filter-title"' +
-                   '       for="' + filterName + '">' +
                    '<input type="radio" name="filter"' +
                    '       value="' + filterName + '" ' +
                    '       id="' + filterName + '">' +
                    '<input type="hidden" name="filter_value" value=""' +
                    '       data-value-for="' + filterName + '">' +
+                   '<label class="filter-title"' +
+                   '       for="' + filterName + '">' +
                    filterActionData.title +
                    '</label>' +
-									 '<div class="form-inline form-group date-filter-controls">' +
-                   '<input type="text" maxlength="10" class="form-control"' +
+                   '<input type="text" maxlength="10" class="input-small"' +
                    '       data-date-from-for="' + filterName + '">' +
-                   '<span>to</span>' +
-                   '<input type="text" maxlength="10" class="form-control"' +
+                   '<span class="help-inline">to</span>' +
+                   '<input type="text" maxlength="10" class="input-small"' +
                    '       data-date-to-for="' + filterName + '">' +
                    '<span class="help-inline get-help">(yyyy-mm-dd)</span>' +
-                   '</div></div>');
+                   '</div>');
 
     var radio = action.find('[type="radio"]');
     var value = action.find('[data-value-for]');
@@ -665,7 +621,7 @@ function tableInit(ctx){
             queryset on the table
           */
           var filterActionRadios = $('#filter-actions-' + ctx.tableName);
-          var filterApplyBtn = $('[data-cat="filter-apply"]');
+          var filterApplyBtn = $('[data-role="filter-apply"]');
 
           var setApplyButtonState = function (e, filterActionValue) {
             if (filterActionValue !== undefined) {
@@ -706,7 +662,7 @@ function tableInit(ctx){
             if (action) {
               // Setup the current selected filter; default to 'all' if
               // no current filter selected
-              var radioInput = action.find('input[name="filter"]');
+              var radioInput = action.children('input[name="filter"]');
               if ((tableParams.filter &&
                   tableParams.filter === radioInput.val()) ||
                   filterActionData.action_name == 'all') {
@@ -832,7 +788,6 @@ function tableInit(ctx){
 
     loadData(tableParams);
 
-
-    $('#filter-modal-'+ctx.tableName).modal('hide');
+    $(this).parent().modal('hide');
   });
 }

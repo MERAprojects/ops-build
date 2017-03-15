@@ -6,8 +6,7 @@ LIC_FILES_CHKSUM = "\
     file://COPYING;md5=751419260aa954499f7abaabaa882bbe\
     file://COPYING.LESSER;md5=6a6a8e020838b23406c81b19c1d46df6\
     "
-UPSTREAM_CHECK_URI = "https://gnupg.org/download/index.html"
-SRC_URI = "${GNUPG_MIRROR}/npth/npth-${PV}.tar.bz2 \
+SRC_URI = "ftp://ftp.gnupg.org/gcrypt/npth/npth-${PV}.tar.bz2 \
            file://pkgconfig.patch \
           "
 

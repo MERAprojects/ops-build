@@ -23,17 +23,19 @@
 # Assign a file to __warn__ to get warnings about slow operations.
 #
 
-
+from __future__ import print_function
 import copy
 import types
 ImmutableTypes = (
+    types.NoneType,
     bool,
     complex,
     float,
     int,
+    long,
     tuple,
     frozenset,
-    str
+    basestring
 )
 
 MUTABLE = "__mutable__"
@@ -59,7 +61,7 @@ class COWDictMeta(COWMeta):
     __call__ = cow
 
     def __setitem__(cls, key, value):
-        if value is not None and not isinstance(value, ImmutableTypes):
+        if not isinstance(value, ImmutableTypes):
             if not isinstance(value, COWMeta):
                 cls.__hasmutable__ = True
             key += MUTABLE
@@ -114,7 +116,7 @@ class COWDictMeta(COWMeta):
         cls.__setitem__(key, cls.__marker__)
 
     def __revertitem__(cls, key):
-        if key not in cls.__dict__:
+        if not cls.__dict__.has_key(key):
             key += MUTABLE
         delattr(cls, key)
 
@@ -181,7 +183,7 @@ class COWSetMeta(COWDictMeta):
         COWDictMeta.__delitem__(cls, repr(hash(value)))
 
     def __in__(cls, value):
-        return repr(hash(value)) in COWDictMeta
+        return COWDictMeta.has_key(repr(hash(value)))
 
     def iterkeys(cls):
         raise TypeError("sets don't have keys")
@@ -190,10 +192,12 @@ class COWSetMeta(COWDictMeta):
         raise TypeError("sets don't have 'items'")
 
 # These are the actual classes you use!
-class COWDictBase(object, metaclass = COWDictMeta):
+class COWDictBase(object):
+    __metaclass__ = COWDictMeta
     __count__ = 0
 
-class COWSetBase(object, metaclass = COWSetMeta):
+class COWSetBase(object):
+    __metaclass__ = COWSetMeta
     __count__ = 0
 
 if __name__ == "__main__":
@@ -213,11 +217,11 @@ if __name__ == "__main__":
     print()
 
     print("a", a)
-    for x in a.items():
+    for x in a.iteritems():
         print(x)
     print("--")
     print("b", b)
-    for x in b.items():
+    for x in b.iteritems():
         print(x)
     print()
 
@@ -225,11 +229,11 @@ if __name__ == "__main__":
     b['a'] = 'c'
 
     print("a", a)
-    for x in a.items():
+    for x in a.iteritems():
         print(x)
     print("--")
     print("b", b)
-    for x in b.items():
+    for x in b.iteritems():
         print(x)
     print()
 
@@ -244,22 +248,22 @@ if __name__ == "__main__":
     a['set'].add("o2")
 
     print("a", a)
-    for x in a['set'].values():
+    for x in a['set'].itervalues():
         print(x)
     print("--")
     print("b", b)
-    for x in b['set'].values():
+    for x in b['set'].itervalues():
         print(x)
     print()
 
     b['set'].add('o3')
 
     print("a", a)
-    for x in a['set'].values():
+    for x in a['set'].itervalues():
         print(x)
     print("--")
     print("b", b)
-    for x in b['set'].values():
+    for x in b['set'].itervalues():
         print(x)
     print()
 
@@ -269,7 +273,7 @@ if __name__ == "__main__":
     a['set2'].add("o2")
 
     print("a", a)
-    for x in a.items():
+    for x in a.iteritems():
         print(x)
     print("--")
     print("b", b)
@@ -283,13 +287,13 @@ if __name__ == "__main__":
     except KeyError:
         print("Yay! deleted key raises error")
 
-    if 'b' in b:
+    if b.has_key('b'):
         print("Boo!")
     else:
         print("Yay - has_key with delete works!")
 
     print("a", a)
-    for x in a.items():
+    for x in a.iteritems():
         print(x)
     print("--")
     print("b", b)
@@ -300,7 +304,7 @@ if __name__ == "__main__":
     b.__revertitem__('b')
 
     print("a", a)
-    for x in a.items():
+    for x in a.iteritems():
         print(x)
     print("--")
     print("b", b)
@@ -310,7 +314,7 @@ if __name__ == "__main__":
 
     b.__revertitem__('dict')
     print("a", a)
-    for x in a.items():
+    for x in a.iteritems():
         print(x)
     print("--")
     print("b", b)

@@ -1,4 +1,5 @@
 SUMMARY = "Remote debugging tools for Eclipse integration"
+LICENSE = "MIT"
 
 inherit packagegroup
 

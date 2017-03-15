@@ -22,10 +22,10 @@
 from django.core.urlresolvers import reverse
 from django.utils import timezone
 
-from tests.browser.selenium_helpers import SeleniumTestCase
+from selenium_helpers import SeleniumTestCase
 
 from orm.models import Project, Release, BitbakeVersion, Build, LogMessage
-from orm.models import Layer, Layer_Version, Recipe, CustomImageRecipe, Variable
+from orm.models import Layer, Layer_Version, Recipe, CustomImageRecipe
 
 class TestBuildDashboardPage(SeleniumTestCase):
     """ Tests for the build dashboard /build/X """
@@ -42,27 +42,11 @@ class TestBuildDashboardPage(SeleniumTestCase):
 
         self.build1 = Build.objects.create(project=project,
                                            started_on=now,
-                                           completed_on=now,
-                                           outcome=Build.SUCCEEDED)
+                                           completed_on=now)
 
         self.build2 = Build.objects.create(project=project,
                                            started_on=now,
-                                           completed_on=now,
-                                           outcome=Build.SUCCEEDED)
-
-        self.build3 = Build.objects.create(project=project,
-                                           started_on=now,
-                                           completed_on=now,
-                                           outcome=Build.FAILED)
-
-        # add Variable objects to the successful builds, as this is the criterion
-        # used to determine whether the left-hand panel should be displayed
-        Variable.objects.create(build=self.build1,
-                                variable_name='Foo',
-                                variable_value='Bar')
-        Variable.objects.create(build=self.build2,
-                                variable_name='Foo',
-                                variable_value='Bar')
+                                           completed_on=now)
 
         # exception
         msg1 = 'an exception was thrown'
@@ -80,33 +64,12 @@ class TestBuildDashboardPage(SeleniumTestCase):
             message=msg2
         )
 
-        # error on the failed build
-        msg3 = 'an error occurred'
-        self.error_message = LogMessage.objects.create(
-            build=self.build3,
-            level=LogMessage.ERROR,
-            message=msg3
-        )
-
-        # warning on the failed build
-        msg4 = 'DANGER WILL ROBINSON'
-        self.warning_message = LogMessage.objects.create(
-            build=self.build3,
-            level=LogMessage.WARNING,
-            message=msg4
-        )
-
         # recipes related to the build, for testing the edit custom image/new
         # custom image buttons
         layer = Layer.objects.create(name='alayer')
         layer_version = Layer_Version.objects.create(
             layer=layer, build=self.build1
         )
-
-        # non-image recipes related to a build, for testing the new custom
-        # image button
-        layer_version2 = Layer_Version.objects.create(layer=layer,
-            build=self.build3)
 
         # image recipes
         self.image_recipe1 = Recipe.objects.create(
@@ -177,47 +140,38 @@ class TestBuildDashboardPage(SeleniumTestCase):
         dashboard for the Build object build
         """
         self._get_build_dashboard(build)
-        return self.find_all('#errors div.alert-danger')
+        return self.find_all('#errors div.alert-error')
 
-    def _check_for_log_message(self, message_elements, log_message):
-        """
-        Check that the LogMessage <log_message> has a representation in
-        the HTML elements <message_elements>.
-
-        message_elements: WebElements representing the log messages shown
-        in the build dashboard; each should have a <pre> element inside
-        it with a data-log-message-id attribute
-
-        log_message: orm.models.LogMessage instance
-        """
-        expected_text = log_message.message
-        expected_pk = str(log_message.pk)
-
-        found = False
-        for element in message_elements:
-            log_message_text = element.find_element_by_tag_name('pre').text.strip()
-            text_matches = (log_message_text == expected_text)
-
-            log_message_pk = element.get_attribute('data-log-message-id')
-            id_matches = (log_message_pk == expected_pk)
-
-            if text_matches and id_matches:
-                found = True
-                break
-
-        template_vars = (expected_text, expected_pk)
-        assertion_failed_msg = 'message not found: ' \
-            'expected text "%s" and ID %s' % template_vars
-        self.assertTrue(found, assertion_failed_msg)
-
-    def _check_for_error_message(self, build, log_message):
+    def _check_for_log_message(self, build, log_message):
         """
         Check whether the LogMessage instance <log_message> is
         represented as an HTML error in the dashboard page for the Build object
         build
         """
         errors = self._get_build_dashboard_errors(build)
-        self._check_for_log_message(errors, log_message)
+        self.assertEqual(len(errors), 2)
+
+        expected_text = log_message.message
+        expected_id = str(log_message.id)
+
+        found = False
+        for error in errors:
+            error_text = error.find_element_by_tag_name('pre').text
+            text_matches = (error_text == expected_text)
+
+            error_id = error.get_attribute('data-error')
+            id_matches = (error_id == expected_id)
+
+            if text_matches and id_matches:
+                found = True
+                break
+
+        template_vars = (expected_text, error_text,
+                         expected_id, error_id)
+        assertion_error_msg = 'exception not found as error: ' \
+            'expected text "%s" and got "%s"; ' \
+            'expected ID %s and got %s' % template_vars
+        self.assertTrue(found, assertion_error_msg)
 
     def _check_labels_in_modal(self, modal, expected):
         """
@@ -225,29 +179,37 @@ class TestBuildDashboardPage(SeleniumTestCase):
         the WebElement modal match the list of text values in expected
         """
         # labels containing the radio buttons we're testing for
-        labels = modal.find_elements_by_css_selector(".radio")
+        labels = modal.find_elements_by_tag_name('label')
 
-        labels_text = [lab.text for lab in labels]
+        # because the label content has the structure
+        #   label text
+        #   <input...>
+        # we have to regex on its innerHTML, as we can't just retrieve the
+        # "label text" on its own via the Selenium API
+        labels_text = sorted(map(
+            lambda label: label.get_attribute('innerHTML'), labels
+        ))
+
+        expected = sorted(expected)
+
         self.assertEqual(len(labels_text), len(expected))
 
-        for expected_text in expected:
-            self.assertTrue(expected_text in labels_text,
-                            "Could not find %s in %s" % (expected_text,
-                                                         labels_text))
+        for idx, label_text in enumerate(labels_text):
+            self.assertRegexpMatches(label_text, expected[idx])
 
     def test_exceptions_show_as_errors(self):
         """
         LogMessages with level EXCEPTION should display in the errors
         section of the page
         """
-        self._check_for_error_message(self.build1, self.exception_message)
+        self._check_for_log_message(self.build1, self.exception_message)
 
     def test_criticals_show_as_errors(self):
         """
         LogMessages with level CRITICAL should display in the errors
         section of the page
         """
-        self._check_for_error_message(self.build1, self.critical_message)
+        self._check_for_log_message(self.build1, self.critical_message)
 
     def test_edit_custom_image_button(self):
         """
@@ -255,13 +217,7 @@ class TestBuildDashboardPage(SeleniumTestCase):
         the user choose one of them to edit
         """
         self._get_build_dashboard(self.build1)
-
-        # click the "edit custom image" button, which populates the modal
-        selector = '[data-role="edit-custom-image-trigger"]'
-        self.click(selector)
-
         modal = self.driver.find_element_by_id('edit-custom-image-modal')
-        self.wait_until_visible("#edit-custom-image-modal")
 
         # recipes we expect to see in the edit custom image modal
         expected_recipes = [
@@ -279,11 +235,10 @@ class TestBuildDashboardPage(SeleniumTestCase):
         self._get_build_dashboard(self.build1)
 
         # click the "new custom image" button, which populates the modal
-        selector = '[data-role="new-custom-image-trigger"]'
+        selector = '[data-role="new-custom-image-trigger"] button'
         self.click(selector)
 
         modal = self.driver.find_element_by_id('new-custom-image-modal')
-        self.wait_until_visible("#new-custom-image-modal")
 
         # recipes we expect to see in the new custom image modal
         expected_recipes = [
@@ -294,54 +249,3 @@ class TestBuildDashboardPage(SeleniumTestCase):
         ]
 
         self._check_labels_in_modal(modal, expected_recipes)
-
-    def test_new_custom_image_button_no_image(self):
-        """
-        Check that a build which builds non-image recipes doesn't show
-        the new custom image button on the dashboard.
-        """
-        self._get_build_dashboard(self.build3)
-        selector = '[data-role="new-custom-image-trigger"]'
-        self.assertFalse(self.element_exists(selector),
-            'new custom image button should not show for builds which ' \
-            'don\'t have any image recipes')
-
-    def test_left_panel(self):
-        """"
-        Builds which succeed should have a left panel and a build summary
-        """
-        self._get_build_dashboard(self.build1)
-
-        left_panel = self.find_all('#nav')
-        self.assertEqual(len(left_panel), 1)
-
-        build_summary = self.find_all('[data-role="build-summary-heading"]')
-        self.assertEqual(len(build_summary), 1)
-
-    def test_failed_no_left_panel(self):
-        """
-        Builds which fail should have no left panel and no build summary
-        """
-        self._get_build_dashboard(self.build3)
-
-        left_panel = self.find_all('#nav')
-        self.assertEqual(len(left_panel), 0)
-
-        build_summary = self.find_all('[data-role="build-summary-heading"]')
-        self.assertEqual(len(build_summary), 0)
-
-    def test_failed_shows_errors_and_warnings(self):
-        """
-        Failed builds should still show error and warning messages
-        """
-        self._get_build_dashboard(self.build3)
-
-        errors = self.find_all('#errors div.alert-danger')
-        self._check_for_log_message(errors, self.error_message)
-
-        # expand the warnings area
-        self.click('#warning-toggle')
-        self.wait_until_visible('#warnings div.alert-warning')
-
-        warnings = self.find_all('#warnings div.alert-warning')
-        self._check_for_log_message(warnings, self.warning_message)

@@ -57,9 +57,6 @@ SSTATEPOSTINSTFUNCS[vardepvalueexclude] .= "| buildhistory_emit_pkghistory"
 # class.
 BUILDHISTORY_PRESERVE = "latest latest_srcrev"
 
-PATCH_GIT_USER_EMAIL ?= "buildhistory@oe"
-PATCH_GIT_USER_NAME ?= "OpenEmbedded"
-
 #
 # Write out metadata about this package for comparison when writing future packages
 #
@@ -148,7 +145,7 @@ python buildhistory_emit_pkghistory() {
                 elif name == "RCONFLICTS":
                     pkginfo.rconflicts = value
                 elif name == "PKGSIZE":
-                    pkginfo.size = int(value)
+                    pkginfo.size = long(value)
                 elif name == "FILES":
                     pkginfo.files = value
                 elif name == "FILELIST":
@@ -236,7 +233,7 @@ python buildhistory_emit_pkghistory() {
                 key = item[0]
                 if key.endswith('_' + pkg):
                     key = key[:-len(pkg)-1]
-                pkgdata[key] = item[1]
+                pkgdata[key] = item[1].decode('utf-8').decode('string_escape')
 
         pkge = pkgdata.get('PKGE', '0')
         pkgv = pkgdata['PKGV']
@@ -277,7 +274,7 @@ python buildhistory_emit_pkghistory() {
         # Gather information about packaged files
         val = pkgdata.get('FILES_INFO', '')
         dictval = json.loads(val)
-        filelist = list(dictval.keys())
+        filelist = dictval.keys()
         filelist.sort()
         pkginfo.filelist = " ".join(filelist)
 
@@ -291,12 +288,14 @@ python buildhistory_emit_pkghistory() {
 
 
 def write_recipehistory(rcpinfo, d):
+    import codecs
+
     bb.debug(2, "Writing recipe history")
 
     pkghistdir = d.getVar('BUILDHISTORY_DIR_PACKAGE', True)
 
     infofile = os.path.join(pkghistdir, "latest")
-    with open(infofile, "w") as f:
+    with codecs.open(infofile, "w", encoding='utf8') as f:
         if rcpinfo.pe != "0":
             f.write(u"PE = %s\n" %  rcpinfo.pe)
         f.write(u"PV = %s\n" %  rcpinfo.pv)
@@ -306,6 +305,8 @@ def write_recipehistory(rcpinfo, d):
 
 
 def write_pkghistory(pkginfo, d):
+    import codecs
+
     bb.debug(2, "Writing package history for package %s" % pkginfo.name)
 
     pkghistdir = d.getVar('BUILDHISTORY_DIR_PACKAGE', True)
@@ -315,20 +316,22 @@ def write_pkghistory(pkginfo, d):
         bb.utils.mkdirhier(pkgpath)
 
     infofile = os.path.join(pkgpath, "latest")
-    with open(infofile, "w") as f:
+    with codecs.open(infofile, "w", encoding='utf8') as f:
         if pkginfo.pe != "0":
             f.write(u"PE = %s\n" %  pkginfo.pe)
         f.write(u"PV = %s\n" %  pkginfo.pv)
         f.write(u"PR = %s\n" %  pkginfo.pr)
 
-        if pkginfo.pkg != pkginfo.name:
-            f.write(u"PKG = %s\n" % pkginfo.pkg)
-        if pkginfo.pkge != pkginfo.pe:
-            f.write(u"PKGE = %s\n" % pkginfo.pkge)
-        if pkginfo.pkgv != pkginfo.pv:
-            f.write(u"PKGV = %s\n" % pkginfo.pkgv)
-        if pkginfo.pkgr != pkginfo.pr:
-            f.write(u"PKGR = %s\n" % pkginfo.pkgr)
+        pkgvars = {}
+        pkgvars['PKG'] = pkginfo.pkg if pkginfo.pkg != pkginfo.name else ''
+        pkgvars['PKGE'] = pkginfo.pkge if pkginfo.pkge != pkginfo.pe else ''
+        pkgvars['PKGV'] = pkginfo.pkgv if pkginfo.pkgv != pkginfo.pv else ''
+        pkgvars['PKGR'] = pkginfo.pkgr if pkginfo.pkgr != pkginfo.pr else ''
+        for pkgvar in pkgvars:
+            val = pkgvars[pkgvar]
+            if val:
+                f.write(u"%s = %s\n" % (pkgvar, val))
+
         f.write(u"RPROVIDES = %s\n" %  pkginfo.rprovides)
         f.write(u"RDEPENDS = %s\n" %  pkginfo.rdepends)
         f.write(u"RRECOMMENDS = %s\n" %  pkginfo.rrecommends)
@@ -346,7 +349,7 @@ def write_pkghistory(pkginfo, d):
         filevarpath = os.path.join(pkgpath, "latest.%s" % filevar)
         val = pkginfo.filevars[filevar]
         if val:
-            with open(filevarpath, "w") as f:
+            with codecs.open(filevarpath, "w", encoding='utf8') as f:
                 f.write(val)
         else:
             if os.path.exists(filevarpath):
@@ -562,11 +565,11 @@ python buildhistory_get_extra_sdkinfo() {
                     tasksizes[task] = origtotal + fsize
                     filesizes[fn] = fsize
         with open(d.expand('${BUILDHISTORY_DIR_SDK}/sstate-package-sizes.txt'), 'w') as f:
-            filesizes_sorted = sorted(filesizes.items(), key=operator.itemgetter(1, 0), reverse=True)
+            filesizes_sorted = sorted(filesizes.items(), key=operator.itemgetter(1), reverse=True)
             for fn, size in filesizes_sorted:
                 f.write('%10d KiB %s\n' % (size, fn))
         with open(d.expand('${BUILDHISTORY_DIR_SDK}/sstate-task-sizes.txt'), 'w') as f:
-            tasksizes_sorted = sorted(tasksizes.items(), key=operator.itemgetter(1, 0), reverse=True)
+            tasksizes_sorted = sorted(tasksizes.items(), key=operator.itemgetter(1), reverse=True)
             for task, size in tasksizes_sorted:
                 f.write('%10d KiB %s\n' % (size, task))
 }
@@ -642,7 +645,7 @@ def buildhistory_get_sdkvars(d):
     sdkvars = "DISTRO DISTRO_VERSION SDK_NAME SDK_VERSION SDKMACHINE SDKIMAGE_FEATURES BAD_RECOMMENDATIONS NO_RECOMMENDATIONS PACKAGE_EXCLUDE"
     if d.getVar('BB_CURRENTTASK', True) == 'populate_sdk_ext':
         # Extensible SDK uses some additional variables
-        sdkvars += " SDK_LOCAL_CONF_WHITELIST SDK_LOCAL_CONF_BLACKLIST SDK_INHERIT_BLACKLIST SDK_UPDATE_URL SDK_EXT_TYPE SDK_RECRDEP_TASKS SDK_INCLUDE_PKGDATA SDK_INCLUDE_TOOLCHAIN"
+        sdkvars += " SDK_LOCAL_CONF_WHITELIST SDK_LOCAL_CONF_BLACKLIST SDK_INHERIT_BLACKLIST SDK_UPDATE_URL SDK_EXT_TYPE SDK_RECRDEP_TASKS"
     listvars = "SDKIMAGE_FEATURES BAD_RECOMMENDATIONS PACKAGE_EXCLUDE SDK_LOCAL_CONF_WHITELIST SDK_LOCAL_CONF_BLACKLIST SDK_INHERIT_BLACKLIST"
     return outputvars(sdkvars, listvars, d)
 
@@ -711,9 +714,15 @@ END
 			git tag -f build-minus-2 build-minus-1 > /dev/null 2>&1 || true
 			git tag -f build-minus-1 > /dev/null 2>&1 || true
 		fi
-
-		check_git_config
-
+		# If the user hasn't set up their name/email, set some defaults
+		# just for this repo (otherwise the commit will fail with older
+		# versions of git)
+		if ! git config user.email > /dev/null ; then
+			git config --local user.email "buildhistory@${DISTRO}"
+		fi
+		if ! git config user.name > /dev/null ; then
+			git config --local user.name "buildhistory"
+		fi
 		# Check if there are new/changed files to commit (other than metadata-revs)
 		repostatus=`git status --porcelain | grep -v " metadata-revs$"`
 		HOSTNAME=`hostname 2>/dev/null || echo unknown`
@@ -833,7 +842,7 @@ python write_srcrev() {
                         f.write('# SRCREV_%s = "%s"\n' % (name, orig_srcrev))
                     f.write('SRCREV_%s = "%s"\n' % (name, srcrev))
             else:
-                f.write('SRCREV = "%s"\n' % srcrevs.values())
+                f.write('SRCREV = "%s"\n' % srcrevs.itervalues().next())
             if len(tag_srcrevs) > 0:
                 for name, srcrev in tag_srcrevs.items():
                     f.write('# tag_%s = "%s"\n' % (name, srcrev))

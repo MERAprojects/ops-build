@@ -3,8 +3,7 @@ Description=DHCP Relay Agent Daemon
 After=network.target
 
 [Service]
-EnvironmentFile=@SYSCONFDIR@/default/dhcp-relay
-ExecStart=@SBINDIR@/dhcrelay -d --no-pid -q $SERVERS
+ExecStart=@SBINDIR@/dhcrelay -d --no-pid
 
 [Install]
 WantedBy=multi-user.target

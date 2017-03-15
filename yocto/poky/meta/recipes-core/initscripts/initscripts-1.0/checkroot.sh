@@ -69,7 +69,7 @@ fi
 # before fsck, since fsck can be quite memory-hungry.
 #
 test "$VERBOSE" != no && echo "Activating swap"
-[ -x /sbin/swapon ] && swapon -a
+swapon -a 2> /dev/null
 
 #
 # Check the root filesystem.

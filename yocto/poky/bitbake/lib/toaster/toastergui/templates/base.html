@@ -8,8 +8,9 @@
       {% block title %} Toaster {% endblock %}
     </title>
     <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}" type="text/css"/>
-    <!--link rel="stylesheet" href="{% static 'css/bootstrap-theme.css' %}" type="text/css"/-->
+    <link rel="stylesheet" href="{% static 'css/bootstrap-responsive.min.css' %}" type='text/css'/>
     <link rel="stylesheet" href="{% static 'css/font-awesome.min.css' %}" type='text/css'/>
+    <link rel="stylesheet" href="{% static 'css/prettify.css' %}" type='text/css'/>
     <link rel="stylesheet" href="{% static 'css/default.css' %}" type='text/css'/>
 
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -19,10 +20,6 @@
     <script src="{% static 'js/jquery.cookie.js' %}">
     </script>
     <script src="{% static 'js/bootstrap.min.js' %}">
-    </script>
-    <script src="{% static 'js/typeahead.jquery.js' %}">
-    </script>
-    <script src="{% static 'js/jsrender.min.js' %}">
     </script>
     <script src="{% static 'js/prettify.js' %}">
     </script>
@@ -34,8 +31,6 @@
     </script>
     {% endif %}
     <script>
-      $.views.settings.delimiters("<%", "%>");
-
       libtoaster.ctx = {
         jsUrl : "{% static 'js/' %}",
         htmlUrl : "{% static 'html/' %}",
@@ -44,7 +39,6 @@
         {% if project.id %}
         projectId : {{project.id}},
         projectPageUrl : {% url 'project' project.id as purl %}{{purl|json}},
-        xhrProjectUrl : {% url 'xhr_project' project.id as pxurl %}{{pxurl|json}},
         projectName : {{project.name|json}},
         recipesTypeAheadUrl: {% url 'xhr_recipestypeahead' project.id as paturl%}{{paturl|json}},
         layersTypeAheadUrl: {% url 'xhr_layerstypeahead' project.id as paturl%}{{paturl|json}},
@@ -53,9 +47,7 @@
         xhrCustomRecipeUrl : "{% url 'xhr_customrecipe' %}",
         projectId : {{project.id}},
         xhrBuildRequestUrl: "{% url 'xhr_buildrequest' project.id %}",
-        mostRecentBuildsUrl: "{% url 'most_recent_builds' %}?project_id={{project.id}}",
         {% else %}
-        mostRecentBuildsUrl: "{% url 'most_recent_builds' %}",
         projectId : undefined,
         projectPageUrl : undefined,
         projectName : undefined,
@@ -66,72 +58,69 @@
     {% endblock %}
   </head>
 
-  <body>
+  <body style="height: 100%">
 
     {% csrf_token %}
-    <div id="loading-notification" class="alert alert-warning lead text-center" style="display:none">
+    <div id="loading-notification" class="alert lead text-center" style="display:none">
       Loading <i class="fa-pulse icon-spinner"></i>
     </div>
 
-    <div id="change-notification" class="alert alert-info alert-dismissible change-notification" style="display:none">
-      <button type="button" class="close" id="hide-alert" data-toggle="alert">&times;</button>
+    <div id="change-notification" class="alert lead alert-info" style="display:none">
+      <button type="button" class="close" id="hide-alert">&times;</button>
       <span id="change-notification-msg"></span>
     </div>
 
-    <nav class="navbar navbar-default navbar-fixed-top">
-      <div class="container-fluid">
-        <div class="navbar-header">
-          <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target="#global-nav" aria-expanded="false">
-            <span class="sr-only">Toggle navigation</span>
-            <span class="icon-bar"></span>
-            <span class="icon-bar"></span>
-            <span class="icon-bar"></span>
-          </button>
-          <div class="toaster-navbar-brand">
-            <a href="/">
-              <img class="logo" src="{% static 'img/logo.png' %}" class="" alt="Yocto logo project"/>
-            </a>
-            <a class="brand" href="/">Toaster</a>
+    <div class="navbar navbar-fixed-top">
+      <div class="navbar-inner">
+        <div class="container-fluid">
+          <a class="brand logo" href="#"><img src="{% static 'img/logo.png' %}" class="" alt="Yocto logo project"/></a>
+          <span class="brand">
+            <a href="/">Toaster</a>
             {% if DEBUG %}
-            <span class="glyphicon glyphicon-info-sign" title="<strong>Toaster version information</strong>" data-content="<dl><dt>Git branch</dt><dd>{{TOASTER_BRANCH}}</dd><dt>Git revision</dt><dd>{{TOASTER_REVISION}}</dd></dl>"></i>
+            <i class="icon-info-sign" title="<strong>Toaster version information</strong>" data-content="<dl><dt>Git branch</dt><dd>{{TOASTER_BRANCH}}</dd><dt>Git revision</dt><dd>{{TOASTER_REVISION}}</dd></dl>"></i>
             {% endif %}
-          </div>
-        </div>
-        <div class="collapse navbar-collapse" id="global-nav">
-            <ul class="nav navbar-nav">
-            {% if request.resolver_match.url_name != 'landing' and request.resolver_match.url_name != 'newproject' %}
-              <li {% if request.resolver_match.url_name == 'all-builds' %}
-              class="active"
-              {% endif %}>
+          </span>
+          {% if request.resolver_match.url_name != 'landing' and request.resolver_match.url_name != 'newproject' %}
+          <ul class="nav">
+            <li {% if request.resolver_match.url_name == 'all-builds' %}
+                class="active"
+                {% endif %}>
               <a href="{% url 'all-builds' %}">
-                <i class="glyphicon glyphicon-tasks"></i>
+                <i class="icon-tasks"></i>
                 All builds
               </a>
-              </li>
-              <li {% if request.resolver_match.url_name == 'all-projects'  %}
-              class="active"
-              {% endif %}>
+            </li>
+            <li {% if request.resolver_match.url_name == 'all-projects'  %}
+                class="active"
+                {% endif %}>
               <a href="{% url 'all-projects' %}">
                 <i class="icon-folder-open"></i>
                 All projects
               </a>
-              </li>
-            {% endif %}
-              <li>
+            </li>
+          </ul>
+          {% endif %}
+          <ul class="nav pull-right">
+            <li>
               <a target="_blank" href="http://www.yoctoproject.org/docs/latest/toaster-manual/toaster-manual.html">
-                <i class="glyphicon glyphicon-book"></i>
-                Documentation
+                <i class="icon-book"></i>
+                Manual
               </a>
-              </li>
-            </ul>
-            <a class="btn btn-default navbar-btn navbar-right" id="new-project-button" href="{% url 'newproject' %}">New project</a>
+            </li>
+          </ul>
+          <span class="pull-right divider-vertical"></span>
+          <div class="btn-group pull-right">
+            <a class="btn" id="new-project-button" href="{% url 'newproject' %}">New project</a>
           </div>
+        </div>
       </div>
-    </nav>
+    </div>
 
-    <div class="container-fluid">
-      {% block pagecontent %}
-      {% endblock %}
+    <div class="container-fluid top-padded">
+      <div class="row-fluid">
+        {% block pagecontent %}
+        {% endblock %}
+      </div>
     </div>
   </body>
 </html>

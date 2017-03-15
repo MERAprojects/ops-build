@@ -34,42 +34,43 @@ class GitANNEX(Git):
         """
         return ud.type in ['gitannex']
 
-    def uses_annex(self, ud, d, wd):
+    def uses_annex(self, ud, d):
         for name in ud.names:
             try:
-                runfetchcmd("%s rev-list git-annex" % (ud.basecmd), d, quiet=True, workdir=wd)
+                runfetchcmd("%s rev-list git-annex" % (ud.basecmd), d, quiet=True)
                 return True
             except bb.fetch.FetchError:
                 pass
 
         return False
 
-    def update_annex(self, ud, d, wd):
+    def update_annex(self, ud, d):
         try:
-            runfetchcmd("%s annex get --all" % (ud.basecmd), d, quiet=True, workdir=wd)
+            runfetchcmd("%s annex get --all" % (ud.basecmd), d, quiet=True)
         except bb.fetch.FetchError:
             return False
-        runfetchcmd("chmod u+w -R %s/annex" % (ud.clonedir), d, quiet=True, workdir=wd)
+        runfetchcmd("chmod u+w -R %s/annex" % (ud.clonedir), d, quiet=True)
 
         return True
 
     def download(self, ud, d):
         Git.download(self, ud, d)
 
-        annex = self.uses_annex(ud, d, ud.clonedir)
+        os.chdir(ud.clonedir)
+        annex = self.uses_annex(ud, d)
         if annex:
-            self.update_annex(ud, d, ud.clonedir)
+            self.update_annex(ud, d)
 
     def unpack(self, ud, destdir, d):
         Git.unpack(self, ud, destdir, d)
 
+        os.chdir(ud.destdir)
         try:
-            runfetchcmd("%s annex init" % (ud.basecmd), d, workdir=ud.destdir)
+            runfetchcmd("%s annex sync" % (ud.basecmd), d)
         except bb.fetch.FetchError:
             pass
 
-        annex = self.uses_annex(ud, d, ud.destdir)
+        annex = self.uses_annex(ud, d)
         if annex:
-            runfetchcmd("%s annex get" % (ud.basecmd), d, workdir=ud.destdir)
-            runfetchcmd("chmod u+w -R %s/.git/annex" % (ud.destdir), d, quiet=True, workdir=ud.destdir)
-
+            runfetchcmd("%s annex get" % (ud.basecmd), d)
+            runfetchcmd("chmod u+w -R %s/.git/annex" % (ud.destdir), d, quiet=True)

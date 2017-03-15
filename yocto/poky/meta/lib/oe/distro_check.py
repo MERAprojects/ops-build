@@ -1,35 +1,53 @@
 from contextlib import contextmanager
-
-from bb.utils import export_proxies
-
+@contextmanager
 def create_socket(url, d):
     import urllib
-
-    socket = None
+    socket = urllib.urlopen(url, proxies=get_proxies(d))
     try:
-        export_proxies(d)
-        socket = urllib.request.urlopen(url)
-    except:
-        bb.warn("distro_check: create_socket url %s can't access" % url)
+        yield socket
+    finally:
+        socket.close()
 
-    return socket
+def get_proxies(d):
+    proxies = {}
+    for key in ['http', 'https', 'ftp', 'ftps', 'no', 'all']:
+        proxy = d.getVar(key + '_proxy', True)
+        if proxy:
+            proxies[key] = proxy
+    return proxies
 
 def get_links_from_url(url, d):
     "Return all the href links found on the web location"
 
-    from bs4 import BeautifulSoup, SoupStrainer
+    import sgmllib
+    
+    class LinksParser(sgmllib.SGMLParser):
+        def parse(self, s):
+            "Parse the given string 's'."
+            self.feed(s)
+            self.close()
+    
+        def __init__(self, verbose=0):
+            "Initialise an object passing 'verbose' to the superclass."
+            sgmllib.SGMLParser.__init__(self, verbose)
+            self.hyperlinks = []
+    
+        def start_a(self, attributes):
+            "Process a hyperlink and its 'attributes'."
+            for name, value in attributes:
+                if name == "href":
+                    self.hyperlinks.append(value.strip('/'))
+    
+        def get_hyperlinks(self):
+            "Return the list of hyperlinks."
+            return self.hyperlinks
 
-    hyperlinks = []
-
-    webpage = ''
-    sock = create_socket(url,d)
-    if sock:
+    with create_socket(url,d) as sock:
         webpage = sock.read()
 
-    soup = BeautifulSoup(webpage, "html.parser", parse_only=SoupStrainer("a"))
-    for line in soup.find_all('a', href=True):
-        hyperlinks.append(line['href'].strip('/'))
-    return hyperlinks
+    linksparser = LinksParser()
+    linksparser.parse(webpage)
+    return linksparser.get_hyperlinks()
 
 def find_latest_numeric_release(url, d):
     "Find the latest listed numeric release on the given url"
@@ -86,8 +104,8 @@ def get_source_package_list_from_url(url, section, d):
 
     bb.note("Reading %s: %s" % (url, section))
     links = get_links_from_url(url, d)
-    srpms = list(filter(is_src_rpm, links))
-    names_list = list(map(package_name_from_srpm, srpms))
+    srpms = filter(is_src_rpm, links)
+    names_list = map(package_name_from_srpm, srpms)
 
     new_pkgs = []
     for pkgs in names_list:
@@ -144,18 +162,14 @@ def find_latest_debian_release(url, d):
 
 def get_debian_style_source_package_list(url, section, d):
     "Return the list of package-names stored in the debian style Sources.gz file"
-    import tempfile
-    import gzip
-
-    webpage = ''
-    sock = create_socket(url,d)
-    if sock:
+    with create_socket(url,d) as sock:
         webpage = sock.read()
-
-    tmpfile = tempfile.NamedTemporaryFile(mode='wb', prefix='oecore.', suffix='.tmp', delete=False)
-    tmpfilename=tmpfile.name
-    tmpfile.write(sock.read())
-    tmpfile.close()
+        import tempfile
+        tmpfile = tempfile.NamedTemporaryFile(mode='wb', prefix='oecore.', suffix='.tmp', delete=False)
+        tmpfilename=tmpfile.name
+        tmpfile.write(sock.read())
+        tmpfile.close()
+    import gzip
     bb.note("Reading %s: %s" % (url, section))
 
     f = gzip.open(tmpfilename)
@@ -252,9 +266,9 @@ def update_distro_data(distro_check_dir, datetime, d):
     import fcntl
     try:
         if not os.path.exists(datetime_file):
-            open(datetime_file, 'w+').close() # touch the file so that the next open won't fail
+            open(datetime_file, 'w+b').close() # touch the file so that the next open won't fail
 
-        f = open(datetime_file, "r+")
+        f = open(datetime_file, "r+b")
         fcntl.lockf(f, fcntl.LOCK_EX)
         saved_datetime = f.read()
         if saved_datetime[0:8] != datetime[0:8]:
@@ -343,8 +357,8 @@ def compare_in_distro_packages_list(distro_check_dir, d):
 
     
     if tmp != None:
-        list = tmp.split(' ')
-        for item in list:
+	list = tmp.split(' ')
+	for item in list:
             matching_distros.append(item)
     bb.note("Matching: %s" % matching_distros)
     return matching_distros

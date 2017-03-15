@@ -27,7 +27,7 @@ logger = logging.getLogger('devtool')
 
 
 def _set_file_values(fn, values):
-    remaining = list(values.keys())
+    remaining = values.keys()
 
     def varfunc(varname, origvalue, op, newlines):
         newvalue = values.get(varname, origvalue)

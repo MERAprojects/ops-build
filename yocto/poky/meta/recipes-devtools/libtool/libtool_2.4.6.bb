@@ -5,11 +5,7 @@ RDEPENDS_${PN} += "bash"
 #
 # We want the results of libtool-cross preserved - don't stage anything ourselves.
 #
-SYSROOT_DIRS_BLACKLIST += " \
-    ${bindir} \
-    ${datadir}/aclocal \
-    ${datadir}/libtool/build-aux \
-"
+SYSROOT_PREPROCESS_FUNCS += "libtool_sysroot_preprocess"
 
 do_install_append () {
         sed -e 's@--sysroot=${STAGING_DIR_HOST}@@g' \
@@ -22,3 +18,10 @@ do_install_append () {
             -e 's@^\(postdep_objects="\).*@\1"@' \
             -i ${D}${bindir}/libtool
 }
+
+libtool_sysroot_preprocess () {
+	rm -rf ${SYSROOT_DESTDIR}${bindir}/*
+	rm -rf ${SYSROOT_DESTDIR}${datadir}/aclocal/*
+	rm -rf ${SYSROOT_DESTDIR}${datadir}/libtool/build-aux/*
+}
+
