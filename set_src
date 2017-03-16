@@ -3,6 +3,10 @@
 import os
 
 repo_list= ['ops-aaa-utils', 'ops-arpmgrd', 'ops-classifierd', 'ops-cli', 'ops-dhcp-tftp', 'ops-fand', 'ops-hw-config', 'ops-intfd', 'ops-ipapps', 'ops-l2macd', 'ops-lacpd', 'ops-lldpd', 'ops-ntpd', 'ops-portd', 'ops-stpd', 'ops-switchd', 'ops-sysd', 'ops-vland']
+
+
+os.system('make distclean')
+os.system('make configure baikal')
 os.system('make devenv_init')
 cur_dir = os.getcwd()
 for repo in repo_list:
@@ -10,4 +14,4 @@ for repo in repo_list:
     os.chdir(cur_dir + '/src/' + repo)
     os.system('git checkout meraswitch/devel/baikal')
     os.chdir(cur_dir)
-
+os.system('make')
