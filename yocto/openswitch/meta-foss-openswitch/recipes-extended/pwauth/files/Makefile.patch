@@ -1,0 +1,11 @@
+--- ./Makefile.origin	2011-10-05 17:45:04.000000000 +0400
++++ ./Makefile	2017-03-17 17:52:52.281141672 +0300
+@@ -6,7 +6,7 @@
+ #   LOCALFLAGS=   compiler flags.  Usually -g, -O, and stuff like that.
+ 
+ # Settings for author's system (Redhat 6.1)
+-CC=gcc
++CC ?= gcc
+ LIB= -lcrypt
+ LOCALFLAGS= -g 
+ 
